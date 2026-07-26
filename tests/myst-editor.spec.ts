@@ -153,7 +153,7 @@ graph TD
       await startInlineMode(page);
       await clearEditor(page);
       await insertToMainEditor(page, { from: 0, insert: `# |date|\n## Test heading\ntest123` });
-      await page.waitForSelector(".inline-custom-styles");
+      await page.waitForSelector(".cm-inline-rendered-md");
     });
 
     test.describe("Common transforms", () => {
@@ -162,7 +162,7 @@ graph TD
         await clearEditor(page);
         const text = "This text should render as bold";
         await insertToMainEditor(page, { from: 0, insert: `**${text}**` });
-        expect((await page.locator(".tok-strong").allInnerTexts()).join("")).toBe(text);
+        await expect(page.locator(".cm-inline-rendered-md strong")).toHaveText(text);
       });
 
       test("Italic text is being rendered", async ({ page }) => {
@@ -170,7 +170,7 @@ graph TD
         await clearEditor(page);
         const text = "This text should render as italic";
         await insertToMainEditor(page, { from: 0, insert: `_${text}_` });
-        expect((await page.locator(".tok-emphasis").allInnerTexts()).join("")).toBe(text);
+        await expect(page.locator(".cm-inline-rendered-md em")).toHaveText(text);
       });
 
       test("Strikethrough text is being rendered", async ({ page }) => {
@@ -178,17 +178,7 @@ graph TD
         await clearEditor(page);
         const text = "This text should render as strikethrough";
         await insertToMainEditor(page, { from: 0, insert: `~~${text}~~` });
-        // Strikethrough is special because it doesn't add any "tok-..." classes to the tokens. Therefore we need to check the style manually.
-        expect(
-          await page.locator(".cm-content *").evaluateAll((elements) =>
-            elements
-              .filter((element) => getComputedStyle(element).textDecorationLine === "line-through")
-              .map((element) => element.textContent)
-              .filter(Boolean)
-              .join(" ")
-              .replace(/\s+/g, " "),
-          ),
-        ).toBe(text);
+        await expect(page.locator(".cm-inline-rendered-md s")).toHaveText(text);
       });
     });
   });

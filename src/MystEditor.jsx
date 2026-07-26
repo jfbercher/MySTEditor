@@ -109,7 +109,7 @@ const MystEditor = () => {
       fullscreen: () => (fullscreen.value = !fullscreen.peek()),
       refresh: () => {
         cache.transform.clear();
-        text.renderText(false);
+        text.rerender();
         alertFor("Rich links refreshed!", 1);
       },
       "suggest-mode": () => (suggestMode.value = !suggestMode.peek()),

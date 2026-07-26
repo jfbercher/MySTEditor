@@ -19,6 +19,8 @@ import { criticMarkup } from "./markdown/markdownCriticMarkup";
 import { markdownFrontmatter } from "./markdown/markdownFrontmatter";
 
 export const markdownUpdatedEffect = StateEffect.define();
+/** Re-project Inline widgets after external data changes (transforms that don't touch the doc text). */
+export const inlineRefreshEffect = StateEffect.define();
 
 hljs.registerLanguage("yaml", yamlHighlight);
 
@@ -98,6 +100,16 @@ export class TextManager {
     this.chunks = newChunks;
     this.lastMd = this.md.value;
     this.lastMode = this.options.mode.value;
+  }
+
+  /**
+   * Force a fresh, uncached render after external data changes (transforms that don't touch the
+   * doc text). Both paths are always attempted: renderText no-ops in Inline, and inlineRefresh
+   * is ignored when the Inline extension isn't loaded.
+   */
+  rerender() {
+    this.editorView.value?.dispatch({ effects: inlineRefreshEffect.of(null) });
+    this.renderText(false);
   }
 
   observePreview() {

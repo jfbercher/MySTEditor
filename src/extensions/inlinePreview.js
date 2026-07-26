@@ -1,14 +1,27 @@
-import { highlightingFor, HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
-import { sanitize, TextManager } from "../text";
-import { getStyleTags, tags } from "@lezer/highlight";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { sanitize, TextManager, inlineRefreshEffect } from "../text";
+import { tags } from "@lezer/highlight";
 import { EditorView } from "codemirror";
-import { Decoration, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
-import { RangeSet, StateEffect, StateField } from "@codemirror/state";
-import { findSoruceMappedPreviousElement } from "./syncDualPane";
+import { Decoration, WidgetType } from "@codemirror/view";
+import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { getLineById } from "../markdown/markdownSourceMap";
-import { criticMarkup } from "./criticMarkup";
 
-export const inlinePreview = (/** @type {TextManager} */ text, options, editorView) => {
+const focusEffect = StateEffect.define();
+
+/** Matches Preview/Inline list padding: 1.25em + 1.5em per nesting level below the first. */
+const listPadEm = (depth) => 1.25 + (Math.max(1, depth) - 1) * 1.5;
+/** Lato size used for rendered inline widgets / Preview. */
+const RENDERED_FONT_PX = 16;
+/** Historical mono advance used to align markdown indent with rendered list gutters. */
+const MONO_CHAR_WIDTH_PX = 8.43333;
+
+/**
+ * Same whole-document markdown-it render as Preview, then project HTML into the editor as replace
+ * widgets (one piece per block / list item). Active selection shows raw source. Uses non-block
+ * replaces so cm-lines stay real — carets work on rendered lines like the old Inline path, without
+ * a second markdown renderer.
+ */
+export const inlinePreview = (/** @type {TextManager} */ text, options) => {
   const previewFont = "Lato";
   const baseFont = { fontFamily: previewFont, lineHeight: "1.3em" };
   const baseHeading = { fontWeight: "bold", lineHeight: 1.5, fontFamily: previewFont };
@@ -28,290 +41,276 @@ export const inlinePreview = (/** @type {TextManager} */ text, options, editorVi
   ]);
   const markdownTheme = EditorView.theme({
     "&": { fontSize: "16px" },
-    ".cm-inline-bullet *": { display: "none" },
-    ".cm-inline-ordered-list-marker *": { display: "none" },
-    ".cm-inline-indent": { display: "inline-block" },
-    ".cm-inline-indent *": { display: "none" },
-    ":is(.cm-widgetBuffer:has(+ .inline-custom-styles), .inline-custom-styles + .cm-widgetBuffer)": { display: "none" },
-    ".cm-critic-meta": { display: "none" },
+    // Old Inline hid these; they add gaps between projected lines.
+    ".cm-widgetBuffer:has(+ .cm-inline-rendered-md), .cm-inline-rendered-md + .cm-widgetBuffer": {
+      display: "none",
+    },
   });
 
-  const tokenElement = ["InlineCode", "Emphasis", "StrongEmphasis", "Strikethrough", "FencedCode", "Image", "Blockquote"];
-  const decorationHidden = Decoration.replace({});
-  const decorationMonospace = Decoration.mark({ class: "cm-inline-mono" });
-  const nodeInSuggestion = (state, node) => state.field(criticMarkup).suggestionRanges.some((r) => node.from >= r.from && node.to <= r.to);
-  const nodeInSelection = (state, node) =>
-    editorView.peek()?.hasFocus &&
-    state.selection.ranges.some((r) => {
-      const rFrom = state.doc.lineAt(r.from).number;
-      const rTo = state.doc.lineAt(r.to).number;
-      const nodeFrom = state.doc.lineAt(node.from).number;
-      const nodeTo = state.doc.lineAt(node.to).number;
-      return (rFrom >= nodeFrom && rFrom <= nodeTo) || (rTo >= nodeFrom && rTo <= nodeTo) || (nodeFrom >= rFrom && nodeTo <= rTo);
+  function computeBlocks(state) {
+    const md = text.md.peek();
+    const lineMap = new Map();
+    const html = sanitize(md.render(state.doc.toString(), { lineMap, startLine: 1, chunkId: 0 }));
+    const dom = new DOMParser().parseFromString(html, "text/html");
+    const byLine = new Map();
+
+    const minLineIn = (el, { skipNestedLists = false } = {}) => {
+      let minLine = Infinity;
+      const walk = (node) => {
+        if (skipNestedLists && node !== el && (node.tagName === "UL" || node.tagName === "OL")) return;
+        const id = node.getAttribute?.("data-line-id");
+        if (id) {
+          const l = getLineById(lineMap, id);
+          if (l != null) minLine = Math.min(minLine, l);
+        }
+        for (const child of node.children) walk(child);
+      };
+      walk(el);
+      return minLine;
+    };
+
+    const listDepth = (li) => {
+      let depth = 0;
+      for (let n = li.parentElement; n; n = n.parentElement) {
+        if (n.tagName === "UL" || n.tagName === "OL") depth++;
+      }
+      return depth;
+    };
+
+    const addListItems = (listEl) => {
+      const ordered = listEl.tagName === "OL";
+      const tag = listEl.tagName.toLowerCase();
+      const types = ordered ? ["decimal", "lower-alpha", "lower-roman"] : ["disc", "circle", "square"];
+      let nextNum = ordered ? Number(listEl.getAttribute("start")) || 1 : 0;
+      for (const li of listEl.children) {
+        if (li.tagName !== "LI") continue;
+        const startLine = minLineIn(li, { skipNestedLists: true });
+        if (startLine === Infinity || byLine.has(startLine)) continue;
+
+        const clone = li.cloneNode(true);
+        for (const nested of [...clone.children]) {
+          if (nested.tagName === "UL" || nested.tagName === "OL") nested.remove();
+        }
+        const depth = Math.max(1, listDepth(li));
+        const listStyle = types[(depth - 1) % 3];
+        const pad = `${listPadEm(depth)}em`;
+        let liAttrs = "";
+        if (ordered) {
+          const num = li.hasAttribute("value") ? Number(li.getAttribute("value")) || nextNum : nextNum;
+          nextNum = num + 1;
+          liAttrs = ` value="${num}"`;
+        }
+        byLine.set(startLine, {
+          html: `<${tag} class="cm-inline-list-item" style="list-style-type:${listStyle};padding-left:${pad}"><li${liAttrs}>${clone.innerHTML}</li></${tag}>`,
+          listDepth: depth,
+        });
+
+        for (const nested of li.children) {
+          if (nested.tagName === "UL" || nested.tagName === "OL") addListItems(nested);
+        }
+      }
+    };
+
+    for (const el of dom.body.children) {
+      if (el.tagName === "UL" || el.tagName === "OL") {
+        addListItems(el);
+        continue;
+      }
+      const minLine = minLineIn(el);
+      if (minLine !== Infinity && !byLine.has(minLine)) byLine.set(minLine, { html: el.outerHTML, listDepth: null });
+    }
+    return { byLine };
+  }
+
+  function blockRanges(state) {
+    const { byLine } = state.field(blocksField);
+    const starts = [...byLine.keys()].sort((a, b) => a - b);
+    const ranges = [];
+    for (let i = 0; i < starts.length; i++) {
+      const startLine = starts[i];
+      let endLine = i + 1 < starts.length ? starts[i + 1] - 1 : state.doc.lines;
+      while (endLine > startLine && !state.doc.line(endLine).text.trim()) endLine--;
+      const block = byLine.get(startLine);
+      ranges.push({
+        startLine,
+        endLine,
+        from: state.doc.line(startLine).from,
+        to: state.doc.line(endLine).to,
+        html: block.html,
+        listDepth: block.listDepth,
+      });
+    }
+    return ranges;
+  }
+
+  /** Extra left margin so source list markers sit where the rendered bullet gutter does. */
+  function sourceListMarginPx(lineText, listDepth) {
+    if (!listDepth) return 0;
+    const indentLen = lineText.length - lineText.trimStart().length;
+    const renderedPadPx = listPadEm(listDepth) * RENDERED_FONT_PX;
+    // "- "/"* "/"1. " ≈ 2 mono cells; keeps item text under rendered content and the mark in the bullet gutter.
+    const listMarkCells = 2;
+    return Math.max(0, renderedPadPx - (indentLen + listMarkCells) * MONO_CHAR_WIDTH_PX);
+  }
+
+  function selectionTouchesBlock(sel, block, doc) {
+    return sel.ranges.some((r) => {
+      const a = doc.lineAt(r.from).number;
+      const b = doc.lineAt(r.to).number;
+      return a <= block.endLine && b >= block.startLine;
     });
-  const nodeInMonospace = (...args) => nodeInSelection(...args) || nodeInSuggestion(...args);
+  }
 
-  const focusEffect = StateEffect.define();
-
-  const renderedBlockNodes = ["Table", "Blockquote", "FencedCode", "Image", "Checkbox", "HTMLBlock"];
-  const renderedInlineNodes = ["Link", "URL", "InlineCode", "Role", "Transform"];
-  class RenderedMarkdownWidget extends WidgetType {
-    constructor(src, isBlock, start, end, cssClasses = []) {
+  class ProjectedWidget extends WidgetType {
+    constructor(html, startLine, endLine) {
       super();
-      this.src = src;
-      this.isBlock = isBlock;
-      this.start = start;
-      this.end = end;
-      this.cssClasses = cssClasses;
+      this.html = html;
+      this.startLine = startLine;
+      this.endLine = endLine;
     }
 
     eq(widget) {
-      return this.src === widget.src;
+      return this.html === widget.html && this.startLine === widget.startLine && this.endLine === widget.endLine;
     }
 
-    toDOM() {
-      const content = document.createElement("span");
-      content.className = "cm-inline-rendered-md";
-      if (this.cssClasses.length > 0) {
-        content.classList.add("inline-custom-styles");
-      }
-      this.cssClasses.flatMap((c) => c.split(" ")).forEach((c) => content.classList.add(c));
-      const md = text.md.peek();
-
-      for (let l = this.start; l <= this.end; l++) {
-        text.lineMap.delete(l);
-      }
-
-      const render = (src) => (this.isBlock ? md.render(src, { lineMap: text.lineMap, startLine: this.start, chunkId: 0 }) : md.renderInline(src));
-      content.innerHTML = sanitize(render(this.src));
-      return content;
+    toDOM(view) {
+      // span (not div): sits in a cm-line so the caret can live on rendered lines.
+      const el = document.createElement("span");
+      el.className = "cm-inline-rendered-md";
+      el.innerHTML = this.html;
+      el.addEventListener("mousedown", (ev) => {
+        if (!(ev.target instanceof Element) || ev.target.tagName !== "INPUT") return;
+        ev.preventDefault();
+        const line = view.state.doc.line(this.startLine);
+        const statusIdx = line.text.indexOf("[") + 1;
+        if (statusIdx <= 0) return;
+        const from = line.from + statusIdx;
+        const current = line.text.slice(statusIdx, statusIdx + 1);
+        view.dispatch({
+          changes: { from, to: from + 1, insert: current === " " ? "x" : " " },
+          effects: focusEffect.of(true),
+          userEvent: "select.pointer",
+        });
+        view.focus();
+      });
+      return el;
     }
 
+    // Let CM place the caret on the line; only intercept links / preview clicks / checkboxes.
     ignoreEvent(ev) {
-      return ev.type == "mousedown" && (options.onPreviewClick.peek()?.(ev) || ev.target.tagName == "A" || ev.target.parentNode?.tagName == "A");
+      if (ev.type !== "mousedown" || !(ev.target instanceof Element)) return false;
+      if (ev.target.tagName === "INPUT") return true;
+      if (ev.target.tagName === "A" || ev.target.closest("a")) return true;
+      return !!options.onPreviewClick.peek()?.(ev);
     }
   }
 
-  function replaceMd(state) {
+  function buildDecorations(state) {
+    const focused = state.field(focusedField);
     const decorations = [];
 
-    syntaxTree(state).iterate({
-      enter(node) {
-        const isBlock = renderedBlockNodes.includes(node.name);
-        if (!isBlock && !renderedInlineNodes.includes(node.name)) return;
-        if (nodeInMonospace(state, node)) return false;
-
-        const lineFrom = state.doc.lineAt(node.from);
-        const lineTo = state.doc.lineAt(node.to);
-        const isMultiline = isBlock && lineTo.number > lineFrom.number;
-        const fromOffset = node.from - lineFrom.from;
-        let src = state.doc.sliceString(node.from, node.to);
-        if (isMultiline && fromOffset > 0) {
-          src = src
-            .split("\n")
-            .map((line, i) => (i == 0 ? line : line.slice(fromOffset)))
-            .join("\n");
+    for (const block of blockRanges(state)) {
+      if (focused && selectionTouchesBlock(state.selection, block, state.doc)) {
+        for (let lineNo = block.startLine; lineNo <= block.endLine; lineNo++) {
+          const line = state.doc.line(lineNo);
+          const margin = sourceListMarginPx(line.text, block.listDepth);
+          decorations.push(
+            Decoration.line({
+              class: "cm-inline-source-line",
+              ...(margin ? { attributes: { style: `margin-left: ${margin}px` } } : {}),
+            }).range(line.from),
+          );
         }
-        const parent = node.node.parent.toTree();
-        const tags = getStyleTags(parent)?.tags;
-        const parentClass = parent.type.name.startsWith("ATXHeading") && tags ? highlightingFor(state, tags) : null;
+        continue;
+      }
+      // Non-block replace keeps the cm-line (carets). Multi-line ranges must use block:true
+      // (CM forbids non-block replaces across line breaks).
+      decorations.push(
+        Decoration.replace({
+          widget: new ProjectedWidget(block.html, block.startLine, block.endLine),
+          block: block.startLine !== block.endLine,
+        }).range(block.from, block.to),
+      );
+    }
 
-        const decoration = Decoration.replace({
-          widget: new RenderedMarkdownWidget(src, isBlock, lineFrom.number, lineTo.number, parentClass ? [parentClass] : []),
-        });
-
-        decorations.push(decoration.range(node.from, node.to));
-      },
-    });
-
-    return decorations;
+    return Decoration.set(decorations);
   }
 
-  const renderMdInline = () => {
-    let initialUpdate = true;
-    return StateField.define({
-      create(state) {
-        return RangeSet.of(replaceMd(state), true);
-      },
+  const focusedField = StateField.define({
+    create: () => false,
+    update: (value, tr) => {
+      for (const e of tr.effects) {
+        if (e.is(focusEffect)) return e.value;
+      }
+      return value;
+    },
+  });
 
-      update(curr, transaction) {
-        const focusChanged = transaction.effects.some((e) => e.is(focusEffect));
-        const selectionChanged =
-          transaction.startState.doc.lineAt(transaction.startState.selection.main.head).number !==
-          transaction.state.doc.lineAt(transaction.state.selection.main.head).number;
-        if (!initialUpdate && !focusChanged && !transaction.docChanged && !selectionChanged) return curr;
-        if (initialUpdate) initialUpdate = false;
-        return RangeSet.of(replaceMd(transaction.state), true);
-      },
+  const blocksField = StateField.define({
+    create: (state) => computeBlocks(state),
+    update: (value, tr) => {
+      const refresh = tr.effects.some((e) => e.is(inlineRefreshEffect));
+      return tr.docChanged || refresh ? computeBlocks(tr.state) : value;
+    },
+  });
 
-      provide(field) {
-        return EditorView.decorations.from(field);
-      },
+  const decorationsField = StateField.define({
+    create: (state) => buildDecorations(state),
+    update: (value, tr) => {
+      const refresh = tr.effects.some((e) => e.is(inlineRefreshEffect));
+      const focusChanged = tr.effects.some((e) => e.is(focusEffect));
+      if (!tr.docChanged && !tr.selection && !refresh && !focusChanged) return value;
+      if (tr.selection && !tr.docChanged && !refresh && !focusChanged) {
+        const ranges = blockRanges(tr.startState);
+        const prev = ranges.find((b) => selectionTouchesBlock(tr.startState.selection, b, tr.startState.doc));
+        const next = ranges.find((b) => selectionTouchesBlock(tr.selection, b, tr.state.doc));
+        if (prev && next && prev.from === next.from) return value;
+      }
+      return buildDecorations(tr.state);
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+
+  const revealSelectedBlock = EditorState.transactionFilter.of((tr) => {
+    if (!tr.selection || tr.docChanged) return tr;
+    if (tr.effects.some((e) => e.is(focusEffect) && e.value === true)) return tr;
+    if (!blockRanges(tr.startState).some((b) => selectionTouchesBlock(tr.selection, b, tr.newDoc))) return tr;
+    return [tr, { effects: focusEffect.of(true) }];
+  });
+
+  const enterJumpedBlock = EditorState.transactionFilter.of((tr) => {
+    if (!tr.selection || tr.docChanged) return tr;
+    if (tr.annotation(Transaction.userEvent) !== "select") return tr;
+    const ranges = blockRanges(tr.startState);
+    const prev = tr.startState.selection.main;
+    const next = tr.selection.main;
+    if (prev.head === next.head) return tr;
+
+    const forward = next.head > prev.head;
+    const lo = Math.min(prev.head, next.head);
+    const hi = Math.max(prev.head, next.head);
+    const candidates = ranges.filter((b) => {
+      if (selectionTouchesBlock(tr.startState.selection, b, tr.startState.doc)) return false;
+      return b.to > lo && b.from < hi;
     });
-  };
+    if (candidates.length === 0) return tr;
 
-  return ViewPlugin.fromClass(
-    class {
-      constructor(view) {
-        this.decorations = this.process(view);
-      }
+    const closest = forward ? candidates.reduce((a, b) => (a.from <= b.from ? a : b)) : candidates.reduce((a, b) => (a.to >= b.to ? a : b));
+    return {
+      selection: EditorSelection.cursor(forward ? closest.from : closest.to),
+      effects: focusEffect.of(true),
+      userEvent: "select",
+    };
+  });
 
-      update(/** @type {ViewUpdate} */ update) {
-        if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged) this.decorations = this.process(update.view);
-      }
-
-      process(/** @type {EditorView} */ view) {
-        const widgets = [];
-
-        for (const { from, to } of view.visibleRanges) {
-          syntaxTree(view.state).iterate({
-            from,
-            to,
-            enter(node) {
-              if (node.name.startsWith("ATXHeading") && nodeInMonospace(view.state, node)) return false;
-              const elementToken = node.name.startsWith("SetextHeading") || tokenElement.includes(node.name);
-              if ((elementToken && nodeInMonospace(view.state, node)) || node.name == "Frontmatter") {
-                const startLine = view.state.doc.lineAt(node.from);
-                const endLine = view.state.doc.lineAt(node.to);
-                widgets.push(decorationMonospace.range(startLine.from, endLine.to));
-                return false;
-              }
-
-              if (node.name === "ListMark" && node.matchContext(["BulletList", "ListItem"]) && !nodeInMonospace(view.state, node)) {
-                widgets.push(
-                  Decoration.mark({
-                    class: "cm-inline-bullet",
-                  }).range(node.from, node.to),
-                );
-              }
-
-              if (node.name === "ListMark" && node.matchContext(["OrderedList", "ListItem"]) && !nodeInMonospace(view.state, node)) {
-                // Get what list item number should this one have, this is to keep it consistent with standard markdown-it rendering
-                const marks = node.node.parent.parent.getChildren("ListItem").flatMap((i) => i.getChildren("ListMark"));
-                const base = parseInt(view.state.doc.sliceString(marks[0].from, marks[0].to));
-                const num = marks.findIndex((m) => m.from == node.from) + base;
-                widgets.push(
-                  Decoration.mark({ class: "cm-inline-ordered-list-marker", attributes: { "data-item-num": `${num}.` } }).range(node.from, node.to),
-                );
-              }
-
-              if (node.name === "HeaderMark") {
-                const parent = node.node.parent.type.name;
-                // Hide the space between the HeaderMark and text in ATX headings
-                const to = parent.startsWith("ATX") ? node.to + 1 : node.to;
-                const line = view.state.doc.lineAt(node.from);
-                const headingText = line.text.slice(node.to - line.from).trim();
-                if (parent.startsWith("ATX") && headingText.length == 0) {
-                  console.warn(`Empty heading in inline mode, not rendering(line ${line.number}): "${line.text}"`);
-                } else {
-                  widgets.push(decorationHidden.range(node.from, to));
-                }
-              }
-
-              if ((node.name == "EmphasisMark" || node.name == "StrikethroughMark") && !nodeInMonospace(view.state, node)) {
-                widgets.push(decorationHidden.range(node.from, node.to));
-              }
-
-              if (node.name == "HardBreak" && !nodeInMonospace(view.state, node)) {
-                widgets.push(decorationHidden.range(node.from, node.from + 1));
-              }
-            },
-          });
-        }
-
-        if (editorView.peek()?.hasFocus) {
-          view.state.selection.ranges.forEach((r) => {
-            const startLine = view.state.doc.lineAt(r.from);
-            const endLine = view.state.doc.lineAt(r.to);
-            if (startLine.from != endLine.to) {
-              widgets.push(decorationMonospace.range(startLine.from, endLine.to));
-            }
-          });
-
-          const { suggestionRanges } = view.state.field(criticMarkup);
-          suggestionRanges.filter((r) => nodeInSelection(view.state, r)).forEach((r) => widgets.push(decorationMonospace.range(r.from, r.to)));
-        }
-
-        // Make all indenting same width as monospace text indent
-        const selectionLines = editorView.peek()?.hasFocus
-          ? new Set(
-              view.state.selection.ranges.flatMap((r) => {
-                const startLine = view.state.doc.lineAt(r.from).number;
-                const endLine = view.state.doc.lineAt(r.to).number;
-                return Array.from({ length: endLine - startLine + 1 }, (_, i) => i + startLine);
-              }),
-            )
-          : new Set();
-        for (const range of view.visibleRanges) {
-          const start = view.state.doc.lineAt(range.from).number;
-          const end = view.state.doc.lineAt(range.to).number;
-          for (let i = start; i <= end; i++) {
-            if (selectionLines.has(i)) continue;
-            const line = view.state.doc.line(i);
-            const indentLength = line.text.length - line.text.trimStart().length;
-            // Empty line or no indent
-            if (indentLength == line.text.length || indentLength == 0) continue;
-
-            const monoCharWidth = 8.43333;
-            widgets.push(
-              Decoration.mark({ class: "cm-inline-indent", attributes: { style: `width: ${indentLength * monoCharWidth}px;` } }).range(
-                line.from,
-                line.from + indentLength,
-              ),
-            );
-          }
-        }
-
-        widgets.sort((w1, w2) => w1.from - w2.from);
-
-        return Decoration.set(widgets);
-      }
-    },
-    {
-      provide: () => [
-        syntaxHighlighting(markdownHighlightStyle),
-        markdownTheme,
-        renderMdInline(),
-        EditorView.focusChangeEffect.of((_, focus) => focusEffect.of(focus)),
-      ],
-      decorations: (v) => v.decorations,
-      eventHandlers: {
-        mousedown(ev, view) {
-          if (!(ev.target instanceof Element) || !ev.target.matches(".cm-inline-rendered-md *")) return;
-
-          ev.preventDefault();
-          if (ev.target.tagName == "INPUT") {
-            // Toggle checkbox
-            const line = view.state.doc.lineAt(view.posAtDOM(ev.target));
-            const statusIdx = line.text.indexOf("[") + 1;
-            const from = line.from + statusIdx;
-            const to = from + 1;
-            const current = line.text.slice(statusIdx, statusIdx + 1);
-            const newStatus = current == " " ? "x" : " ";
-            view.dispatch({ changes: { from, to, insert: newStatus } });
-          } else {
-            view.focus();
-            let id = ev.target.getAttribute("data-line-id");
-            let elem = ev.target;
-            if (!id) {
-              // check parents and siblings
-              while (elem && elem.tagName !== "HTML-CHUNK") {
-                const parent = elem.parentElement;
-                [id, elem] = findSoruceMappedPreviousElement(elem);
-                if (id) break;
-                elem = parent;
-              }
-            }
-            if (id) {
-              const lineNumber = getLineById(text.lineMap, id);
-              const line = view.state.doc.line(lineNumber);
-              view.dispatch({ selection: { anchor: line.from } });
-            } else {
-              view.dispatch({ selection: { anchor: view.posAtDOM(ev.target) } });
-            }
-          }
-        },
-      },
-    },
-  );
+  return [
+    focusedField,
+    blocksField,
+    decorationsField,
+    revealSelectedBlock,
+    enterJumpedBlock,
+    syntaxHighlighting(markdownHighlightStyle),
+    markdownTheme,
+    EditorView.focusChangeEffect.of((_, focus) => focusEffect.of(focus)),
+  ];
 };

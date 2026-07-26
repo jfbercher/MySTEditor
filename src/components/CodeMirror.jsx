@@ -183,24 +183,16 @@ const CodeEditor = styled.div`
     }
   }
 
-  .cm-inline-bullet::after {
-    display: inline-block;
-    content: "•";
-  }
-
-  .cm-inline-ordered-list-marker::after {
-    display: inline-block;
-    font-family: "Lato";
-    content: attr(data-item-num);
-  }
-
   .cm-inline-rendered-md {
-    &:not(&.inline-custom-styles) {
-      all: initial;
-      color: inherit;
-      font-family: "Lato";
-      font-size: 16px;
-    }
+    /* Same Preview HTML, projected into a cm-line (non-block replace) so carets still work. */
+    all: initial;
+    display: inline-block;
+    width: 100%;
+    vertical-align: top;
+    box-sizing: border-box;
+    color: inherit;
+    font-family: "Lato";
+    font-size: 16px;
 
     ${MdStyles}
 
@@ -209,17 +201,16 @@ const CodeEditor = styled.div`
     }
 
     & > * {
-      margin: 0 !important;
+      margin-block: 0 !important;
     }
   }
 
-  .cm-inline-mono,
-  .cm-inline-mono *,
-  .cm-line > *:has(> .cm-inline-mono) {
+  /* Active inline block shown as source — match Source mode monospace. */
+  .cm-line.cm-inline-source-line,
+  .cm-line.cm-inline-source-line * {
     font-family: monospace !important;
-    line-height: 1.3em !important;
     font-size: 14px !important;
-    display: inline-block !important;
+    line-height: 1.3em !important;
   }
 
   .cm-editor .cm-lintRange-error {
@@ -359,7 +350,7 @@ const CodeMirror = () => {
           b.useSyncPreviewWithCursor({ text, preview: text.preview.value, lastTyped }),
         )
         .if(options.yamlSchema.value, (b) => b.useYamlSchema(options.yamlSchema.value, editorView, linter))
-        .if(options.mode.value === "Inline", (b) => b.useInlinePreview(text, options, editorView))
+        .if(options.mode.value === "Inline", (b) => b.useInlinePreview(text, options))
         .useTrackHeadings(headings)
         .useExceptionSink(error)
         .useLogger(logger)

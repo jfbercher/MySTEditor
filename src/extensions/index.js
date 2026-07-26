@@ -305,8 +305,8 @@ export class ExtensionBuilder {
     return this;
   }
 
-  useInlinePreview(text, options, editorView) {
-    this.extensions.push(inlinePreview(text, options, editorView));
+  useInlinePreview(text, options) {
+    this.extensions.push(inlinePreview(text, options));
     return this;
   }
 

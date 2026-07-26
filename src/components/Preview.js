@@ -211,23 +211,29 @@ export const MdStyles = css`
     margin-right: auto;
   }
 
+  /* Compact lists — match Inline projection (was 40px + 0.5em gaps). */
   li {
-    margin-bottom: 0.5em;
+    margin: 0;
     line-height: 1.3em;
     p {
-      padding: 0px;
+      margin: 0;
+      padding: 0;
     }
   }
   ul,
   ol {
     list-style: revert;
-    padding-left: 40px;
-    padding-top: 0.5em;
+    list-style-position: outside;
+    margin: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    padding-left: 1.25em;
   }
-  /* Add some padding to the outermost ul */
-  &[class^="Preview"] > ul {
-    padding-top: 0.5em;
-    padding-bottom: 0.5em;
+  ul ul,
+  ol ol,
+  ul ol,
+  ol ul {
+    padding-left: 1.5em;
   }
 
   blockquote {
