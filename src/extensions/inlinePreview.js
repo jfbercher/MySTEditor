@@ -2,9 +2,8 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { sanitize, TextManager, inlineRefreshEffect } from "../text";
 import { tags } from "@lezer/highlight";
 import { EditorView } from "codemirror";
-import { Decoration, ViewPlugin, WidgetType } from "@codemirror/view";
+import { Decoration, WidgetType } from "@codemirror/view";
 import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
-import { effect } from "@preact/signals";
 
 const focusEffect = StateEffect.define();
 
@@ -245,9 +244,9 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     },
   });
 
-  // Only ever recomputed on inlineRefreshEffect, which TextManager dispatches from the same
-  // debounced signal that drives Preview - never synchronously on docChanged, or every keystroke
-  // would block on a whole-document render.
+  // Only recomputed when TextManager.scheduleRender dispatches inlineRefreshEffect (same pipeline
+  // as Preview) — never synchronously on docChanged, or every keystroke would block on a
+  // whole-document render.
   const blocksField = StateField.define({
     create: computeBlocks,
     update: (value, tr) => (tr.effects.some((e) => e.is(inlineRefreshEffect)) ? computeBlocks(tr.state) : value),
@@ -259,8 +258,8 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     create: buildDecorations,
     update: (value, tr) => {
       if (tr.effects.some((e) => e.is(inlineRefreshEffect) || e.is(focusEffect))) return buildDecorations(tr.state);
-      // Typing: the projection is stale until the debounced refresh lands, so just map the existing
-      // widgets through the change. Keeps the caret responsive; content catches up a tick later.
+      // Typing: the projection is stale until the scheduled refresh lands, so just map the existing
+      // widgets through the change. Keeps the caret responsive; content catches up a frame later.
       if (tr.docChanged) return value.map(tr.changes);
       // Selection: only the block under the cursor is shown as source, so a move within one block
       // changes nothing.
@@ -303,27 +302,12 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     };
   });
 
-  // Re-project off `text.text` - the same debounced signal Preview renders from - instead of
-  // synchronously per keystroke. The first run only registers the signal dependency; the initial
-  // projection comes from blocksField.create.
-  const refreshOnRender = ViewPlugin.define((view) => {
-    let registered = false;
-    return {
-      destroy: effect(() => {
-        text.text.value;
-        if (registered) view.dispatch({ effects: inlineRefreshEffect.of(null) });
-        registered = true;
-      }),
-    };
-  });
-
   return [
     focusedField,
     blocksField,
     decorationsField,
     revealSelectedBlock,
     enterJumpedBlock,
-    refreshOnRender,
     syntaxHighlighting(markdownHighlightStyle),
     markdownTheme,
     EditorView.focusChangeEffect.of((_, focus) => focusEffect.of(focus)),

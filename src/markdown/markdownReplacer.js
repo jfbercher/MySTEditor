@@ -23,6 +23,8 @@ import { escapeRE } from "markdown-it/lib/common/utils";
 export class TransformCache extends Map {
   #pending = new Map();
   #listeners = new Set();
+  /** Bumped on clear() so in-flight promises cannot write or notify after invalidation. */
+  #generation = 0;
 
   /** @param {(input: string) => void} listener - run with each settled input. @returns {() => void} unsubscribe */
   onChange(listener) {
@@ -31,6 +33,7 @@ export class TransformCache extends Map {
   }
 
   clear() {
+    this.#generation++;
     this.#pending.clear();
     super.clear();
   }
@@ -38,17 +41,23 @@ export class TransformCache extends Map {
   /** Store `promise`'s result under `input`; repeated inputs share the one in-flight promise. */
   resolve(input, promise, target) {
     if (this.#pending.has(input)) return;
+    const generation = this.#generation;
     this.#pending.set(input, promise);
 
     promise
-      .then((result) => this.set(input, result))
+      .then((result) => {
+        if (generation !== this.#generation) return;
+        this.set(input, result);
+      })
       .catch((err) => {
         console.error("Error in custom transform:", target, "Caused by input:", input, "Error:", err);
+        if (generation !== this.#generation) return;
         // Cache the raw input so a failed transform isn't retried on every render.
         this.set(input, input);
       })
       .finally(() => {
-        this.#pending.delete(input);
+        if (this.#pending.get(input) === promise) this.#pending.delete(input);
+        if (generation !== this.#generation) return;
         this.#listeners.forEach((listener) => listener(input));
       });
   }

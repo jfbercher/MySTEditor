@@ -337,9 +337,11 @@ const CodeMirror = () => {
         .if(options.collaboration.value.commentsEnabled, (b) => b.useComments({ ycomments: collab.value.ycomments }))
         .addUpdateListener((update) => {
           if (!update.docChanged) return;
+          // Apply every update immediately — coalescing this with the text sync dropped
+          // intermediate line shifts and broke dual-pane cursor/preview sync.
+          text.shiftLineMap(update);
           clearTimeout(renderTimer.current);
           renderTimer.current = setTimeout(() => {
-            text.shiftLineMap(update);
             text.text.value = view.state.doc.toString();
           });
         })

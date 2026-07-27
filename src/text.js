@@ -26,6 +26,11 @@ hljs.registerLanguage("yaml", yamlHighlight);
 
 /** This class stores the document text and renders the Markdown in the Preview */
 export class TextManager {
+  /** @type {number} - pending requestAnimationFrame id, 0 when no render is scheduled */
+  #renderFrame = 0;
+  /** @type {{ useCache: boolean, staleInputs: Set<string> } | null} */
+  #renderPending = null;
+
   constructor({ initialText, editorView, cache, options, userSettings, cleanups }) {
     this.text = signal(initialText.peek());
     this.lineMap = new Map();
@@ -70,28 +75,46 @@ export class TextManager {
 
       return md;
     });
-    effect(() => this.renderText());
+    // Doc text and async transform settles share one rAF pipeline (Preview + Inline refresh).
+    // Every signal renderText reads has to be touched here: the render itself runs in a rAF
+    // callback, where reads aren't tracked, so these are what actually schedule it.
+    effect(() => {
+      this.text.value;
+      this.md.value;
+      this.preview.value;
+      this.editorView.value;
+      this.options.mode.value;
+      this.scheduleRender();
+    });
     effect(() => (window.myst_editor[options.id.value].text = this.text.value));
     effect(() => this.observePreview());
 
-    // Async transforms resolve into the shared cache instead of patching the DOM, so re-render to
-    // pick their results up: Inline re-projects, Preview re-renders only the chunks that contained
-    // them. Coalesced, since a document's transforms tend to settle in bursts.
-    const resolved = new Set();
-    let settled;
-    const unsubscribe = cache.transform.onChange((input) => {
-      resolved.add(input);
-      clearTimeout(settled);
-      settled = setTimeout(() => {
-        const inputs = [...resolved];
-        resolved.clear();
-        this.editorView.value?.dispatch({ effects: inlineRefreshEffect.of(null) });
-        this.renderText(true, false, (chunkText) => inputs.some((input) => chunkText.includes(input)));
-      }, 50);
-    });
+    const unsubscribe = cache.transform.onChange((input) => this.scheduleRender({ staleInput: input }));
     cleanups?.push(() => {
-      clearTimeout(settled);
+      if (this.#renderFrame) cancelAnimationFrame(this.#renderFrame);
+      this.#renderFrame = 0;
+      this.#renderPending = null;
       unsubscribe();
+    });
+  }
+
+  /**
+   * Coalesce Preview + Inline refreshes onto the next animation frame.
+   * @param {{ useCache?: boolean, staleInput?: string }} [opts]
+   */
+  scheduleRender({ useCache = true, staleInput } = {}) {
+    if (!this.#renderPending) this.#renderPending = { useCache: true, staleInputs: new Set() };
+    this.#renderPending.useCache = this.#renderPending.useCache && useCache;
+    if (staleInput) this.#renderPending.staleInputs.add(staleInput);
+
+    if (this.#renderFrame) return;
+    this.#renderFrame = requestAnimationFrame(() => {
+      this.#renderFrame = 0;
+      const { useCache: cached, staleInputs } = this.#renderPending;
+      this.#renderPending = null;
+      const stale = staleInputs.size > 0 ? (chunkText) => [...staleInputs].some((input) => chunkText.includes(input)) : undefined;
+      this.editorView.value?.dispatch({ effects: inlineRefreshEffect.of(null) });
+      this.renderText(cached, false, stale);
     });
   }
 
@@ -108,7 +131,8 @@ export class TextManager {
       ? this.chunks.reduce((lookup, chunk) => (stale?.(chunk.text) ? lookup : { ...lookup, [chunk.hash]: { html: chunk.html, oldId: chunk.id } }), {})
       : {};
     const newChunks = this.splitTextIntoChunks(chunkLookup);
-    const chunkEls = newChunks.map((c) => this.preview.value.querySelector(`html-chunk#html-chunk-${c.id}`));
+    const chunkEls =
+      this.chunks.length == newChunks.length ? newChunks.map((c) => this.preview.value.querySelector(`html-chunk#html-chunk-${c.id}`)) : [];
 
     if (this.chunks.length != newChunks.length || chunkEls.some((el) => !el)) {
       // Render all chunks
@@ -130,13 +154,12 @@ export class TextManager {
   }
 
   /**
-   * Force a fresh, uncached render after external data changes (transforms that don't touch the
-   * doc text). Both paths are always attempted: renderText no-ops in Inline, and inlineRefresh
-   * is ignored when the Inline extension isn't loaded.
+   * Fresh, uncached render after external data changed (transforms that don't touch the doc text).
+   * Goes through the same frame as everything else, so it can safely be called from anywhere -
+   * including from within a CodeMirror update, where dispatching synchronously would throw.
    */
   rerender() {
-    this.editorView.value?.dispatch({ effects: inlineRefreshEffect.of(null) });
-    this.renderText(false);
+    this.scheduleRender({ useCache: false });
   }
 
   observePreview() {
