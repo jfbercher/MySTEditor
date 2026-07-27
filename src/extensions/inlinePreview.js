@@ -279,6 +279,8 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
 
   const enterJumpedBlock = EditorState.transactionFilter.of((tr) => {
     if (!tr.selection || tr.docChanged) return tr;
+    // Exactly "select", not isUserEvent("select"): keyboard motion (Down and Shift+Down alike) uses
+    // the bare event, while a click is "select.pointer" and must land where it was aimed.
     if (tr.annotation(Transaction.userEvent) !== "select") return tr;
     const ranges = blockRanges(tr.startState);
     const prev = tr.startState.selection.main;
@@ -295,8 +297,11 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     if (candidates.length === 0) return tr;
 
     const closest = forward ? candidates.reduce((a, b) => (a.from <= b.from ? a : b)) : candidates.reduce((a, b) => (a.to >= b.to ? a : b));
+    const head = forward ? closest.from : closest.to;
     return {
-      selection: EditorSelection.cursor(forward ? closest.from : closest.to),
+      // Keep the anchor when the selection is being extended (Shift+Down), or the jump would
+      // collapse the range and re-anchor it at the block edge.
+      selection: next.empty ? EditorSelection.cursor(head) : EditorSelection.range(next.anchor, head),
       effects: focusEffect.of(true),
       userEvent: "select",
     };
