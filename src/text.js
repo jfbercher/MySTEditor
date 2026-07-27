@@ -26,7 +26,7 @@ hljs.registerLanguage("yaml", yamlHighlight);
 
 /** This class stores the document text and renders the Markdown in the Preview */
 export class TextManager {
-  constructor({ initialText, editorView, cache, options, userSettings }) {
+  constructor({ initialText, editorView, cache, options, userSettings, cleanups }) {
     this.text = signal(initialText.peek());
     this.lineMap = new Map();
     this.chunks = [];
@@ -51,9 +51,9 @@ export class TextManager {
         },
       })
         .use(markdownitDocutils, { directives: { ...directivesDefault, ...newDirectives } })
-        .use(markdownReplacer(options.transforms.value, options.parent, cache.transform))
-        .use(useCustomRoles(options.customRoles.value, options.parent, cache.transform))
-        .use(useCustomDirectives(options.customDirectives.value, options.parent, cache.transform))
+        .use(markdownReplacer(options.transforms.value, cache.transform))
+        .use(useCustomRoles(options.customRoles.value, cache.transform))
+        .use(useCustomDirectives(options.customDirectives.value, cache.transform))
         .use(markdownMermaid, { lineMap: this.lineMap, parent: options.parent, theme: options.mermaidTheme.value })
         .use(markdownSourceMap)
         .use(checkLinks)
@@ -73,9 +73,30 @@ export class TextManager {
     effect(() => this.renderText());
     effect(() => (window.myst_editor[options.id.value].text = this.text.value));
     effect(() => this.observePreview());
+
+    // Async transforms resolve into the shared cache instead of patching the DOM, so re-render to
+    // pick their results up: Inline re-projects, Preview re-renders only the chunks that contained
+    // them. Coalesced, since a document's transforms tend to settle in bursts.
+    const resolved = new Set();
+    let settled;
+    const unsubscribe = cache.transform.onChange((input) => {
+      resolved.add(input);
+      clearTimeout(settled);
+      settled = setTimeout(() => {
+        const inputs = [...resolved];
+        resolved.clear();
+        this.editorView.value?.dispatch({ effects: inlineRefreshEffect.of(null) });
+        this.renderText(true, false, (chunkText) => inputs.some((input) => chunkText.includes(input)));
+      }, 50);
+    });
+    cleanups?.push(() => {
+      clearTimeout(settled);
+      unsubscribe();
+    });
   }
 
-  renderText(useCache = true, force = false) {
+  /** @param {(chunkText: string) => boolean} [stale] - re-render these chunks even when cached */
+  renderText(useCache = true, force = false, stale = undefined) {
     const previewVisible = ["Both", "Preview"].includes(this.options.mode.value) || force;
     if (!this.preview.value || !this.editorView.value || !previewVisible) {
       this.lastMode = this.options.mode.value;
@@ -83,18 +104,24 @@ export class TextManager {
     }
     const newMode = this.lastMode && this.options.mode.value !== this.lastMode;
     const cache = (!this.lastMd || this.lastMd == this.md.value) && !newMode && useCache;
-    const chunkLookup = cache ? this.chunks.reduce((lookup, chunk) => ({ ...lookup, [chunk.hash]: { html: chunk.html, oldId: chunk.id } }), {}) : {};
+    const chunkLookup = cache
+      ? this.chunks.reduce((lookup, chunk) => (stale?.(chunk.text) ? lookup : { ...lookup, [chunk.hash]: { html: chunk.html, oldId: chunk.id } }), {})
+      : {};
     const newChunks = this.splitTextIntoChunks(chunkLookup);
+    const chunkEls = newChunks.map((c) => this.preview.value.querySelector(`html-chunk#html-chunk-${c.id}`));
 
-    if (this.chunks.length != newChunks.length || !cache) {
+    if (this.chunks.length != newChunks.length || chunkEls.some((el) => !el)) {
       // Render all chunks
       const toRemove = [...this.preview.value.childNodes].filter((c) => !c.classList || !c.classList.contains("cm-previewFocus"));
       toRemove.forEach((c) => this.preview.value.removeChild(c));
       this.preview.value.innerHTML += newChunks.map((c) => `<html-chunk id="html-chunk-${c.id}">${c.html}</html-chunk>`).join("");
     } else {
-      newChunks
-        .filter((newChunk, idx) => newChunk.hash !== this.chunks[idx].hash)
-        .forEach((chunk) => (this.preview.value.querySelector(`html-chunk#html-chunk-${chunk.id}`).innerHTML = chunk.html));
+      // Patch only the chunks that actually changed. Comparing rendered html rather than the text
+      // hash also catches transforms whose output changed while the source text stayed the same,
+      // so an uncached re-render doesn't have to throw the whole preview away.
+      newChunks.forEach((chunk, idx) => {
+        if (chunk.html !== this.chunks[idx].html) chunkEls[idx].innerHTML = chunk.html;
+      });
     }
 
     this.chunks = newChunks;

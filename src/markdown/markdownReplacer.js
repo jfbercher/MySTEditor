@@ -1,6 +1,5 @@
 import MarkdownIt from "markdown-it";
 import { Directive, directivePlugin, Role, rolePlugin } from "markdown-it-docutils";
-import { waitForElement } from "../utils";
 import { escapeRE } from "markdown-it/lib/common/utils";
 
 /**
@@ -13,72 +12,73 @@ import { escapeRE } from "markdown-it/lib/common/utils";
  * `transform` will be applied to all matches of `target`.
  */
 
-class PreviewWrapper {
-  constructor(preview, cache) {
-    this.preview = preview;
-    this.cache = cache;
+/**
+ * Transform results, keyed by the matched input.
+ *
+ * This is also how async transforms deliver their output: they resolve into the cache, which
+ * notifies its listeners, and each mode then re-renders and reads the finished HTML back out.
+ * Delivery is therefore identical in Preview and Inline, and nothing depends on the markup a
+ * transform produced still being in the document by the time its promise settles.
+ */
+export class TransformCache extends Map {
+  #pending = new Map();
+  #listeners = new Set();
+
+  /** @param {(input: string) => void} listener - run with each settled input. @returns {() => void} unsubscribe */
+  onChange(listener) {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
   }
 
-  fillPlaceholder(placeholderId, html) {
-    const placeholder = this.preview.getElementById(placeholderId);
-    if (placeholder) placeholder.outerHTML = html;
+  clear() {
+    this.#pending.clear();
+    super.clear();
   }
 
-  cancelTransform(placeholderId) {
-    const el = this.preview.getElementById(placeholderId);
-    if (el) el.outerHTML = el.innerHTML;
-  }
-
-  /**
-   * Creates a placeholder which will be replaced with the value of resolved `promise`.
-   * If promise fails to resolve then placeholder will be removed
-   *
-   * @param {Promise<string>} promise
-   * @returns {string}
-   */
-  createTransformPlaceholder(input, promise, target) {
-    const placeholderId = "placeholder-" + Math.random().toString().slice(2);
+  /** Store `promise`'s result under `input`; repeated inputs share the one in-flight promise. */
+  resolve(input, promise, target) {
+    if (this.#pending.has(input)) return;
+    this.#pending.set(input, promise);
 
     promise
-      .then(waitForElement(this.preview, placeholderId))
-      .then((result) => {
-        this.cache.set(input, result);
-        this.fillPlaceholder(placeholderId, result);
-      })
+      .then((result) => this.set(input, result))
       .catch((err) => {
         console.error("Error in custom transform:", target, "Caused by input:", input, "Error:", err);
-        this.cancelTransform(placeholderId);
-        this.cache.set(input, input);
+        // Cache the raw input so a failed transform isn't retried on every render.
+        this.set(input, input);
+      })
+      .finally(() => {
+        this.#pending.delete(input);
+        this.#listeners.forEach((listener) => listener(input));
       });
-
-    return `<span id="${placeholderId}">${input}</span>`;
-  }
-
-  /**
-   * Adds special handling to transformations which return promises.
-   *
-   * @param {Transform}
-   * @returns {Transform}
-   */
-  overloadTransform({ transform: originalTransform, target, ...rest }) {
-    return {
-      target,
-      transform: (input, ...params) => {
-        const cached = this.cache.get(input);
-        if (cached) return cached;
-
-        let transformResult = originalTransform(input, ...params);
-
-        if (typeof transformResult.then == "function") {
-          return this.createTransformPlaceholder(input, transformResult, target);
-        }
-
-        return transformResult;
-      },
-      ...rest,
-    };
   }
 }
+
+/**
+ * Adds caching and async support to a transformation.
+ *
+ * @param {TransformCache} cache
+ * @returns {(t: Transform) => Transform}
+ */
+const overloadTransform =
+  (cache) =>
+  ({ transform: originalTransform, target, ...rest }) => ({
+    target,
+    transform: (input, ...params) => {
+      // `has`, not truthiness: a transform that legitimately resolves to "" would otherwise be
+      // retried on every render, and since resolving now triggers a render, that would not settle.
+      if (cache.has(input)) return cache.get(input);
+
+      const result = originalTransform(input, ...params);
+      if (typeof result?.then != "function") return result;
+
+      // Async: leave the raw input in place for now. Resolving notifies the cache's listeners,
+      // and the re-render that follows picks up the finished HTML from the cache above.
+      cache.resolve(input, result, target);
+      return input;
+    },
+    ...rest,
+  });
 
 /**
  * @param {string} txt
@@ -90,10 +90,9 @@ const applyTransform = (txt, { transform, target }) => txt.replaceAll(target, tr
  * @param {Transform[]} transforms
  * @returns {function(MarkdownIt): void}
  */
-const markdownReplacer = (transforms, editorParent, cache) => (markdownIt) => {
-  const preview = new PreviewWrapper(editorParent, cache);
+const markdownReplacer = (transforms, cache) => (markdownIt) => {
   const mappedTransforms = transforms.map((t) => ({
-    ...preview.overloadTransform(t),
+    ...overloadTransform(cache)(t),
     /** A regular expression for a transform that only matches at the beggining of a string, useful for parsing */
     beginTarget: new RegExp(`^(?:${t.target instanceof RegExp ? t.target.source : escapeRE(t.target)})`, t.target.flags ?? "g"),
   }));
@@ -153,10 +152,9 @@ const toDocutilsRole = ({ target, transform }) => {
  *  @param { Transform[] } transforms
  *  @returns {function(MarkdownIt): void}
  */
-const useCustomRoles = (transforms, previewNode, cache) => (markdownIt) => {
-  const preview = new PreviewWrapper(previewNode, cache);
+const useCustomRoles = (transforms, cache) => (markdownIt) => {
   const customRoles = transforms
-    .map((t) => preview.overloadTransform(t))
+    .map(overloadTransform(cache))
     .map(toDocutilsRole)
     .reduce((roles, { name, role }) => {
       roles[name] = role;
@@ -192,10 +190,9 @@ const toDocutilsDirective = ({ target, transform, required_arguments = 0, option
   return { name: target, directive: DocutilsDirective };
 };
 
-const useCustomDirectives = (transforms, previewNode, cache) => (markdownIt) => {
-  const preview = new PreviewWrapper(previewNode, cache);
+const useCustomDirectives = (transforms, cache) => (markdownIt) => {
   const customDirectives = transforms
-    .map((t) => preview.overloadTransform(t))
+    .map(overloadTransform(cache))
     .map(toDocutilsDirective)
     .reduce((directives, { name, directive }) => {
       directives[name] = directive;

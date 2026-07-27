@@ -37,7 +37,9 @@ const markdownItMermaid = (md, { lineMap, parent, theme }) => {
     if (!cached || cached.hash !== hash) {
       cached = contentCache.get(hash) ?? cached;
     }
-    const id = Math.random().toString().replace(".", "");
+    // Position/content derived, not random: re-rendering an unchanged diagram must produce
+    // identical HTML, otherwise renderers see a change and needlessly replace the rendered SVG.
+    const id = token.attrGet("data-line-id") ?? hash;
     token.attrSet("id", `mermaid-${id}`);
 
     if (cached) {

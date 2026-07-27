@@ -1,7 +1,12 @@
 import markdownIt from "markdown-it";
 
 const SRC_LINE_ID = "data-line-id";
-const randomLineId = () => Math.random().toString().replace(".", "");
+/**
+ * Derived from the position rather than random, so that re-rendering unchanged content yields
+ * byte-identical HTML. Renderers compare rendered output to decide what to touch (see TextManager
+ * and the Inline projection), and random ids would make every re-render look like a change.
+ */
+const lineId = (chunkId, line) => `${chunkId}-${line}`;
 const inlineContainers = ["paragraph_open", "heading_open"];
 const ignoreTypes = ["inline", "bullet_list_open", "ordered_list_open", "table_open", "td_open", "thead_open", "tbody_open"];
 
@@ -19,7 +24,7 @@ export default function markdownSourceMap(md) {
     function addLineAttr(token) {
       const line = token.map[0] + state.env.startLine - (state.env.chunkId !== 0);
       if (!state.env.lineMap.has(line)) {
-        const id = randomLineId();
+        const id = lineId(state.env.chunkId, line);
         state.env.lineMap.set(line, id);
         token.attrSet(SRC_LINE_ID, id);
       }
@@ -125,7 +130,7 @@ function wrapFencedLinesInSpan(/** @type {markdownIt} */ md) {
       .split("\n")
       .filter((_, i, lines) => i !== lines.length - 1)
       .map((l, i) => {
-        const id = randomLineId();
+        const id = lineId(env.chunkId, startLine + i + 1);
         env.lineMap.set(startLine + i + 1, id);
         return `<span ${SRC_LINE_ID}="${id}">${l}</span>`;
       })

@@ -10,6 +10,7 @@ import { CollaborationClient } from "./collaboration";
 import { CodeMirror as VimCM, vim } from "@replit/codemirror-vim";
 import { collabClientFacet, lineNumbersCompartment } from "./extensions";
 import { TextManager } from "./text";
+import { TransformCache } from "./markdown/markdownReplacer";
 import Templates from "./components/Templates";
 import { yRemoteAnnotation } from "./extensions/collab";
 import { syntaxTree } from "@codemirror/language";
@@ -294,7 +295,7 @@ export function createMystState(/** @type {typeof defaults} */ opts) {
     /** @type {Signal<EditorView?>} */
     editorView: signal(null),
     cache: {
-      transform: new Map(),
+      transform: new TransformCache(),
     },
     userSettings: signal(userSettings),
     collab,
