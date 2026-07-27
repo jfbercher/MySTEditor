@@ -1,5 +1,5 @@
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { sanitize, TextManager, inlineRefreshEffect } from "../text";
+import { TextManager, inlineRefreshEffect } from "../text";
 import { tags } from "@lezer/highlight";
 import { EditorView } from "codemirror";
 import { Decoration, WidgetType } from "@codemirror/view";
@@ -15,10 +15,9 @@ const RENDERED_FONT_PX = 16;
 const MONO_CHAR_WIDTH_PX = 8.43333;
 
 /**
- * Same whole-document markdown-it render as Preview, then project HTML into the editor as replace
- * widgets (one piece per block / list item). Active selection shows raw source. Uses non-block
- * replaces so cm-lines stay real — carets work on rendered lines like the old Inline path, without
- * a second markdown renderer.
+ * Project TextManager's cached Preview chunks into CM replace widgets. No second markdown-it pass —
+ * scheduleRender updates chunks first, then dispatches inlineRefreshEffect. Softbroken paragraphs /
+ * list items become one widget per source line so carets stay non-block.
  */
 export const inlinePreview = (/** @type {TextManager} */ text, options) => {
   const previewFont = "Lato";
@@ -40,39 +39,86 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
   ]);
   const markdownTheme = EditorView.theme({
     "&": { fontSize: "16px" },
-    // Old Inline hid these; they add gaps between projected lines.
     ".cm-widgetBuffer:has(+ .cm-inline-rendered-md), .cm-inline-rendered-md + .cm-widgetBuffer": {
       display: "none",
     },
   });
 
-  function computeBlocks(state) {
-    const md = text.md.peek();
-    const lineMap = new Map();
-    const html = sanitize(md.render(state.doc.toString(), { lineMap, startLine: 1, chunkId: 0 }));
+  const minLineIn = (lineOfId, el, { skipNestedLists = false } = {}) => {
+    let minLine = Infinity;
+    const walk = (node) => {
+      if (skipNestedLists && node !== el && (node.tagName === "UL" || node.tagName === "OL")) return;
+      const line = lineOfId.get(node.getAttribute?.("data-line-id"));
+      if (line != null) minLine = Math.min(minLine, line);
+      for (const child of node.children || []) walk(child);
+    };
+    walk(el);
+    return minLine;
+  };
+
+  /** Split on <br> (markdown-it softbreaks) so each source line can be a non-block widget. */
+  const softbreakParts = (lineOfId, el) => {
+    const parts = [];
+    let part = { line: Infinity, nodes: [] };
+    const flush = () => {
+      if (part.nodes.length) parts.push(part);
+      part = { line: Infinity, nodes: [] };
+    };
+    for (const child of [...el.childNodes]) {
+      if (child.nodeName === "BR") {
+        flush();
+        continue;
+      }
+      if (child.nodeType === Node.TEXT_NODE && !child.textContent?.trim()) continue;
+      const line = child.nodeType === Node.ELEMENT_NODE ? minLineIn(lineOfId, /** @type {Element} */ (child)) : Infinity;
+      if (line !== Infinity) part.line = Math.min(part.line, line);
+      part.nodes.push(child);
+    }
+    flush();
+    return parts.filter((p) => p.line !== Infinity);
+  };
+
+  const wrapNodes = (el, nodes) => {
+    const wrap = document.createElement(el.tagName);
+    for (const attr of el.attributes || []) {
+      if (attr.name === "data-line-id") continue;
+      wrap.setAttribute(attr.name, attr.value);
+    }
+    for (const n of nodes) wrap.appendChild(n.cloneNode(true));
+    return wrap.outerHTML;
+  };
+
+  /** Project Preview chunk HTML → start-line widget map (uses TextManager.lineMap). */
+  function projectHtml(html, lineMap) {
     const dom = new DOMParser().parseFromString(html, "text/html");
     const byLine = new Map();
-    // Reverse the line map once; looking each id up in `lineMap` would rescan it per element.
     const lineOfId = new Map([...lineMap].map(([line, id]) => [id, line]));
 
-    const minLineIn = (el, { skipNestedLists = false } = {}) => {
-      let minLine = Infinity;
-      const walk = (node) => {
-        if (skipNestedLists && node !== el && (node.tagName === "UL" || node.tagName === "OL")) return;
-        const line = lineOfId.get(node.getAttribute?.("data-line-id"));
-        if (line != null) minLine = Math.min(minLine, line);
-        for (const child of node.children) walk(child);
-      };
-      walk(el);
-      return minLine;
-    };
-
-    const listDepth = (li) => {
+    const listDepthOf = (li) => {
       let depth = 0;
       for (let n = li.parentElement; n; n = n.parentElement) {
         if (n.tagName === "UL" || n.tagName === "OL") depth++;
       }
       return depth;
+    };
+
+    const addSoftbroken = (contentEl, depth, toHtml) => {
+      // List items often wrap text in a single <p>; split that for per-line widgets.
+      let el = contentEl;
+      if (el.tagName === "LI") {
+        const kids = [...el.children].filter((c) => c.tagName !== "UL" && c.tagName !== "OL");
+        if (kids.length === 1 && kids[0].tagName === "P") el = kids[0];
+      }
+      const parts = softbreakParts(lineOfId, el);
+      if (parts.length <= 1) {
+        const startLine = parts[0]?.line ?? minLineIn(lineOfId, contentEl, { skipNestedLists: true });
+        if (startLine === Infinity || byLine.has(startLine)) return;
+        byLine.set(startLine, { html: toHtml([...el.childNodes]), listDepth: depth });
+        return;
+      }
+      for (const part of parts) {
+        if (!byLine.has(part.line)) byLine.set(part.line, { html: toHtml(part.nodes), listDepth: depth });
+      }
     };
 
     const addListItems = (listEl) => {
@@ -82,14 +128,11 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
       let nextNum = ordered ? Number(listEl.getAttribute("start")) || 1 : 0;
       for (const li of listEl.children) {
         if (li.tagName !== "LI") continue;
-        const startLine = minLineIn(li, { skipNestedLists: true });
-        if (startLine === Infinity || byLine.has(startLine)) continue;
-
         const clone = li.cloneNode(true);
         for (const nested of [...clone.children]) {
           if (nested.tagName === "UL" || nested.tagName === "OL") nested.remove();
         }
-        const depth = Math.max(1, listDepth(li));
+        const depth = Math.max(1, listDepthOf(li));
         const listStyle = types[(depth - 1) % 3];
         const pad = `${listPadEm(depth)}em`;
         let liAttrs = "";
@@ -98,11 +141,12 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
           nextNum = num + 1;
           liAttrs = ` value="${num}"`;
         }
-        byLine.set(startLine, {
-          html: `<${tag} class="cm-inline-list-item" style="list-style-type:${listStyle};padding-left:${pad}"><li${liAttrs}>${clone.innerHTML}</li></${tag}>`,
-          listDepth: depth,
-        });
-
+        const toHtml = (nodes) => {
+          const tmp = document.createElement("div");
+          for (const n of nodes) tmp.appendChild(n.cloneNode(true));
+          return `<${tag} class="cm-inline-list-item" style="list-style-type:${listStyle};padding-left:${pad}"><li${liAttrs}>${tmp.innerHTML}</li></${tag}>`;
+        };
+        addSoftbroken(clone, depth, toHtml);
         for (const nested of li.children) {
           if (nested.tagName === "UL" || nested.tagName === "OL") addListItems(nested);
         }
@@ -114,10 +158,20 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
         addListItems(el);
         continue;
       }
-      const minLine = minLineIn(el);
+      if (el.tagName === "P" || /^H[1-6]$/.test(el.tagName)) {
+        addSoftbroken(el, null, (nodes) => wrapNodes(el, nodes));
+        continue;
+      }
+      const minLine = minLineIn(lineOfId, el);
       if (minLine !== Infinity && !byLine.has(minLine)) byLine.set(minLine, { html: el.outerHTML, listDepth: null });
     }
-    return { byLine };
+    return byLine;
+  }
+
+  function computeBlocks() {
+    // Shared Preview chunk cache — renderText always refreshes chunks (DOM only when Preview/Both).
+    if (!text.chunks.length) text.renderText(true, true);
+    return { byLine: projectHtml(text.chunks.map((c) => c.html).join(""), text.lineMap) };
   }
 
   function blockRanges(state) {
@@ -141,12 +195,10 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     return ranges;
   }
 
-  /** Extra left margin so source list markers sit where the rendered bullet gutter does. */
   function sourceListMarginPx(lineText, listDepth) {
     if (!listDepth) return 0;
     const indentLen = lineText.length - lineText.trimStart().length;
     const renderedPadPx = listPadEm(listDepth) * RENDERED_FONT_PX;
-    // "- "/"* "/"1. " ≈ 2 mono cells; keeps item text under rendered content and the mark in the bullet gutter.
     const listMarkCells = 2;
     return Math.max(0, renderedPadPx - (indentLen + listMarkCells) * MONO_CHAR_WIDTH_PX);
   }
@@ -172,7 +224,6 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     }
 
     toDOM(view) {
-      // span (not div): sits in a cm-line so the caret can live on rendered lines.
       const el = document.createElement("span");
       el.className = "cm-inline-rendered-md";
       el.innerHTML = this.html;
@@ -194,7 +245,6 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
       return el;
     }
 
-    // Let CM place the caret on the line; only intercept links / preview clicks / checkboxes.
     ignoreEvent(ev) {
       if (ev.type !== "mousedown" || !(ev.target instanceof Element)) return false;
       if (ev.target.tagName === "INPUT") return true;
@@ -221,8 +271,6 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
         }
         continue;
       }
-      // Non-block replace keeps the cm-line (carets). Multi-line ranges must use block:true
-      // (CM forbids non-block replaces across line breaks).
       decorations.push(
         Decoration.replace({
           widget: new ProjectedWidget(block.html, block.startLine, block.endLine),
@@ -244,12 +292,9 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     },
   });
 
-  // Only recomputed when TextManager.scheduleRender dispatches inlineRefreshEffect (same pipeline
-  // as Preview) — never synchronously on docChanged, or every keystroke would block on a
-  // whole-document render.
   const blocksField = StateField.define({
     create: computeBlocks,
-    update: (value, tr) => (tr.effects.some((e) => e.is(inlineRefreshEffect)) ? computeBlocks(tr.state) : value),
+    update: (value, tr) => (tr.effects.some((e) => e.is(inlineRefreshEffect)) ? computeBlocks() : value),
   });
 
   const blockAt = (state, selection) => blockRanges(state).find((b) => selectionTouchesBlock(selection, b, state.doc));
@@ -258,11 +303,7 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     create: buildDecorations,
     update: (value, tr) => {
       if (tr.effects.some((e) => e.is(inlineRefreshEffect) || e.is(focusEffect))) return buildDecorations(tr.state);
-      // Typing: the projection is stale until the scheduled refresh lands, so just map the existing
-      // widgets through the change. Keeps the caret responsive; content catches up a frame later.
       if (tr.docChanged) return value.map(tr.changes);
-      // Selection: only the block under the cursor is shown as source, so a move within one block
-      // changes nothing.
       if (!tr.selection) return value;
       const from = blockAt(tr.startState, tr.startState.selection)?.from;
       return from === blockAt(tr.state, tr.selection)?.from ? value : buildDecorations(tr.state);
@@ -279,8 +320,6 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
 
   const enterJumpedBlock = EditorState.transactionFilter.of((tr) => {
     if (!tr.selection || tr.docChanged) return tr;
-    // Exactly "select", not isUserEvent("select"): keyboard motion (Down and Shift+Down alike) uses
-    // the bare event, while a click is "select.pointer" and must land where it was aimed.
     if (tr.annotation(Transaction.userEvent) !== "select") return tr;
     const ranges = blockRanges(tr.startState);
     const prev = tr.startState.selection.main;
@@ -299,8 +338,6 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     const closest = forward ? candidates.reduce((a, b) => (a.from <= b.from ? a : b)) : candidates.reduce((a, b) => (a.to >= b.to ? a : b));
     const head = forward ? closest.from : closest.to;
     return {
-      // Keep the anchor when the selection is being extended (Shift+Down), or the jump would
-      // collapse the range and re-anchor it at the block edge.
       selection: next.empty ? EditorSelection.cursor(head) : EditorSelection.range(next.anchor, head),
       effects: focusEffect.of(true),
       userEvent: "select",

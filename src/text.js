@@ -113,15 +113,15 @@ export class TextManager {
       const { useCache: cached, staleInputs } = this.#renderPending;
       this.#renderPending = null;
       const stale = staleInputs.size > 0 ? (chunkText) => [...staleInputs].some((input) => chunkText.includes(input)) : undefined;
-      this.editorView.value?.dispatch({ effects: inlineRefreshEffect.of(null) });
+      // Chunks first so Inline's refresh projects the same cached HTML Preview uses.
       this.renderText(cached, false, stale);
+      this.editorView.value?.dispatch({ effects: inlineRefreshEffect.of(null) });
     });
   }
 
   /** @param {(chunkText: string) => boolean} [stale] - re-render these chunks even when cached */
   renderText(useCache = true, force = false, stale = undefined) {
-    const previewVisible = ["Both", "Preview"].includes(this.options.mode.value) || force;
-    if (!this.preview.value || !this.editorView.value || !previewVisible) {
+    if (!this.editorView.value && !force) {
       this.lastMode = this.options.mode.value;
       return;
     }
@@ -131,21 +131,22 @@ export class TextManager {
       ? this.chunks.reduce((lookup, chunk) => (stale?.(chunk.text) ? lookup : { ...lookup, [chunk.hash]: { html: chunk.html, oldId: chunk.id } }), {})
       : {};
     const newChunks = this.splitTextIntoChunks(chunkLookup);
-    const chunkEls =
-      this.chunks.length == newChunks.length ? newChunks.map((c) => this.preview.value.querySelector(`html-chunk#html-chunk-${c.id}`)) : [];
 
-    if (this.chunks.length != newChunks.length || chunkEls.some((el) => !el)) {
-      // Render all chunks
-      const toRemove = [...this.preview.value.childNodes].filter((c) => !c.classList || !c.classList.contains("cm-previewFocus"));
-      toRemove.forEach((c) => this.preview.value.removeChild(c));
-      this.preview.value.innerHTML += newChunks.map((c) => `<html-chunk id="html-chunk-${c.id}">${c.html}</html-chunk>`).join("");
-    } else {
-      // Patch only the chunks that actually changed. Comparing rendered html rather than the text
-      // hash also catches transforms whose output changed while the source text stayed the same,
-      // so an uncached re-render doesn't have to throw the whole preview away.
-      newChunks.forEach((chunk, idx) => {
-        if (chunk.html !== this.chunks[idx].html) chunkEls[idx].innerHTML = chunk.html;
-      });
+    const previewVisible = ["Both", "Preview"].includes(this.options.mode.value) || force;
+    if (this.preview.value && previewVisible) {
+      const chunkEls =
+        this.chunks.length == newChunks.length ? newChunks.map((c) => this.preview.value.querySelector(`html-chunk#html-chunk-${c.id}`)) : [];
+
+      if (this.chunks.length != newChunks.length || chunkEls.some((el) => !el)) {
+        const toRemove = [...this.preview.value.childNodes].filter((c) => !c.classList || !c.classList.contains("cm-previewFocus"));
+        toRemove.forEach((c) => this.preview.value.removeChild(c));
+        this.preview.value.innerHTML += newChunks.map((c) => `<html-chunk id="html-chunk-${c.id}">${c.html}</html-chunk>`).join("");
+      } else {
+        // Patch only chunks whose rendered html changed (covers transform output with unchanged source).
+        newChunks.forEach((chunk, idx) => {
+          if (chunk.html !== this.chunks[idx].html) chunkEls[idx].innerHTML = chunk.html;
+        });
+      }
     }
 
     this.chunks = newChunks;
@@ -204,10 +205,10 @@ export class TextManager {
         return chunks;
       }, [])
       .map(({ text, startLine, endLine }, chunkId) => {
-        // We need to take into account both the chunk content and position
-        const hash = new IMurMurHash(text + chunkId.toString(), 42).result();
+        // Include startLine so a later chunk isn't reused with stale absolute line ids after an
+        // earlier chunk grows/shrinks.
+        const hash = new IMurMurHash(`${text}\0${chunkId}\0${startLine}`, 42).result();
 
-        // Clear source mappings for chunk we are rerendering
         if (!(hash in chunkLookup)) {
           for (let l = startLine; l <= endLine; l++) {
             this.lineMap.delete(l);
@@ -216,7 +217,7 @@ export class TextManager {
 
         const html =
           chunkLookup[hash]?.html || sanitize(this.md.value.render(text, { chunkId, startLine, lineMap: this.lineMap, view: this.editorView.value }));
-        return { text, hash, id: chunkId, html, oldId: chunkLookup[hash]?.oldId };
+        return { text, hash, id: chunkId, html, oldId: chunkLookup[hash]?.oldId, startLine, endLine };
       });
   }
 
