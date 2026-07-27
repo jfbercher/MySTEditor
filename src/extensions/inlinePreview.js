@@ -2,9 +2,9 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { sanitize, TextManager, inlineRefreshEffect } from "../text";
 import { tags } from "@lezer/highlight";
 import { EditorView } from "codemirror";
-import { Decoration, WidgetType } from "@codemirror/view";
+import { Decoration, ViewPlugin, WidgetType } from "@codemirror/view";
 import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
-import { getLineById } from "../markdown/markdownSourceMap";
+import { effect } from "@preact/signals";
 
 const focusEffect = StateEffect.define();
 
@@ -53,16 +53,15 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     const html = sanitize(md.render(state.doc.toString(), { lineMap, startLine: 1, chunkId: 0 }));
     const dom = new DOMParser().parseFromString(html, "text/html");
     const byLine = new Map();
+    // Reverse the line map once; looking each id up in `lineMap` would rescan it per element.
+    const lineOfId = new Map([...lineMap].map(([line, id]) => [id, line]));
 
     const minLineIn = (el, { skipNestedLists = false } = {}) => {
       let minLine = Infinity;
       const walk = (node) => {
         if (skipNestedLists && node !== el && (node.tagName === "UL" || node.tagName === "OL")) return;
-        const id = node.getAttribute?.("data-line-id");
-        if (id) {
-          const l = getLineById(lineMap, id);
-          if (l != null) minLine = Math.min(minLine, l);
-        }
+        const line = lineOfId.get(node.getAttribute?.("data-line-id"));
+        if (line != null) minLine = Math.min(minLine, line);
         for (const child of node.children) walk(child);
       };
       walk(el);
@@ -246,27 +245,28 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     },
   });
 
+  // Only ever recomputed on inlineRefreshEffect, which TextManager dispatches from the same
+  // debounced signal that drives Preview - never synchronously on docChanged, or every keystroke
+  // would block on a whole-document render.
   const blocksField = StateField.define({
-    create: (state) => computeBlocks(state),
-    update: (value, tr) => {
-      const refresh = tr.effects.some((e) => e.is(inlineRefreshEffect));
-      return tr.docChanged || refresh ? computeBlocks(tr.state) : value;
-    },
+    create: computeBlocks,
+    update: (value, tr) => (tr.effects.some((e) => e.is(inlineRefreshEffect)) ? computeBlocks(tr.state) : value),
   });
 
+  const blockAt = (state, selection) => blockRanges(state).find((b) => selectionTouchesBlock(selection, b, state.doc));
+
   const decorationsField = StateField.define({
-    create: (state) => buildDecorations(state),
+    create: buildDecorations,
     update: (value, tr) => {
-      const refresh = tr.effects.some((e) => e.is(inlineRefreshEffect));
-      const focusChanged = tr.effects.some((e) => e.is(focusEffect));
-      if (!tr.docChanged && !tr.selection && !refresh && !focusChanged) return value;
-      if (tr.selection && !tr.docChanged && !refresh && !focusChanged) {
-        const ranges = blockRanges(tr.startState);
-        const prev = ranges.find((b) => selectionTouchesBlock(tr.startState.selection, b, tr.startState.doc));
-        const next = ranges.find((b) => selectionTouchesBlock(tr.selection, b, tr.state.doc));
-        if (prev && next && prev.from === next.from) return value;
-      }
-      return buildDecorations(tr.state);
+      if (tr.effects.some((e) => e.is(inlineRefreshEffect) || e.is(focusEffect))) return buildDecorations(tr.state);
+      // Typing: the projection is stale until the debounced refresh lands, so just map the existing
+      // widgets through the change. Keeps the caret responsive; content catches up a tick later.
+      if (tr.docChanged) return value.map(tr.changes);
+      // Selection: only the block under the cursor is shown as source, so a move within one block
+      // changes nothing.
+      if (!tr.selection) return value;
+      const from = blockAt(tr.startState, tr.startState.selection)?.from;
+      return from === blockAt(tr.state, tr.selection)?.from ? value : buildDecorations(tr.state);
     },
     provide: (field) => EditorView.decorations.from(field),
   });
@@ -274,7 +274,7 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
   const revealSelectedBlock = EditorState.transactionFilter.of((tr) => {
     if (!tr.selection || tr.docChanged) return tr;
     if (tr.effects.some((e) => e.is(focusEffect) && e.value === true)) return tr;
-    if (!blockRanges(tr.startState).some((b) => selectionTouchesBlock(tr.selection, b, tr.newDoc))) return tr;
+    if (!blockAt(tr.startState, tr.selection)) return tr;
     return [tr, { effects: focusEffect.of(true) }];
   });
 
@@ -303,12 +303,27 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     };
   });
 
+  // Re-project off `text.text` - the same debounced signal Preview renders from - instead of
+  // synchronously per keystroke. The first run only registers the signal dependency; the initial
+  // projection comes from blocksField.create.
+  const refreshOnRender = ViewPlugin.define((view) => {
+    let registered = false;
+    return {
+      destroy: effect(() => {
+        text.text.value;
+        if (registered) view.dispatch({ effects: inlineRefreshEffect.of(null) });
+        registered = true;
+      }),
+    };
+  });
+
   return [
     focusedField,
     blocksField,
     decorationsField,
     revealSelectedBlock,
     enterJumpedBlock,
+    refreshOnRender,
     syntaxHighlighting(markdownHighlightStyle),
     markdownTheme,
     EditorView.focusChangeEffect.of((_, focus) => focusEffect.of(focus)),
