@@ -828,6 +828,24 @@ test.describe.parallel("Inline mode document/projection consistency", () => {
     expect(anchor).toBe(0);
   });
 
+  test("Clicking a checkbox after lines above were deleted toggles the task", async ({ page }) => {
+    await page.keyboard.type("line one\nline two\n\n- [ ] task\n\ntrailing");
+    await expect(page.locator(".cm-inline-rendered-md input[type=checkbox]")).toBeVisible();
+
+    // Delete and click in one turn — yielding would wait for re-project.
+    // Covers clicking a mapped checkbox while its widget still has a stale line number
+    // (e.g. lines above were just deleted, locally or by a collab peer).
+    await page.evaluate((id) => {
+      const view = window.myst_editor[id].main_editor;
+      const removed = "line one\nline two\n\n".length;
+      view.dispatch({ changes: { from: 0, to: removed }, selection: { anchor: view.state.doc.length - removed } });
+      view.dom.querySelector(".cm-inline-rendered-md input[type=checkbox]")
+        ?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    }, id);
+
+    await expectEditorText(page, "- [x] task\n\ntrailing");
+  });
+
   test("Moving the selection before re-project after a delete does not break the editor", async ({ page }) => {
     await page.keyboard.type("line one\nline two\n\n- [ ] task\n\ntrailing");
     await expect(page.locator(".cm-inline-rendered-md").first()).toBeVisible();
