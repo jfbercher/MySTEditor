@@ -245,7 +245,9 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
       el.addEventListener("mousedown", (ev) => {
         if (!(ev.target instanceof Element) || ev.target.tagName !== "INPUT") return;
         ev.preventDefault();
-        const line = view.state.doc.line(this.startLine);
+        // Resolved from where the widget sits now: decorations are mapped through edits, so the
+        // line captured when it was built may have moved or stopped existing.
+        const line = view.state.doc.lineAt(view.posAtDOM(ev.target));
         const statusIdx = line.text.indexOf("[") + 1;
         if (statusIdx <= 0) return;
         const from = line.from + statusIdx;
