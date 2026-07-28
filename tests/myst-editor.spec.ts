@@ -794,6 +794,26 @@ test.describe.parallel("Inline mode document/projection consistency", () => {
     await expect(page.locator(".cm-content .cm-line")).toHaveCount(3);
   });
 
+  test("A blank line under the caret is shown as source", async ({ page }) => {
+    await page.keyboard.type("alpha\n\nbeta");
+    await expectEditorText(page, "alpha\n\nbeta");
+
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.press("ArrowDown");
+    // Blank lines belong to no rendered block. Without this they keep the rendered font, so their
+    // indentation is laid out at the wrong width and the caret looks misplaced.
+    await expect(page.locator(".cm-content .cm-line").nth(1)).toHaveClass(/cm-inline-source-line/);
+  });
+
+  test("A line holding only indentation is shown as source", async ({ page }) => {
+    await page.keyboard.type("alpha");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Tab");
+    await expectEditorText(page, "alpha\n  ");
+
+    await expect(page.locator(".cm-content .cm-line").nth(1)).toHaveClass(/cm-inline-source-line/);
+  });
+
   test("Extending a selection across rendered blocks keeps the anchor", async ({ page }) => {
     await page.keyboard.type("* one\n* two\n* three");
     await page.keyboard.press("Control+Home");
