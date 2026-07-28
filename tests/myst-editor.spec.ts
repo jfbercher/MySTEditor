@@ -827,6 +827,24 @@ test.describe.parallel("Inline mode document/projection consistency", () => {
     expect(head).not.toBe(anchor);
     expect(anchor).toBe(0);
   });
+
+  test("Moving the selection before re-project after a delete does not break the editor", async ({ page }) => {
+    await page.keyboard.type("line one\nline two\n\n- [ ] task\n\ntrailing");
+    await expect(page.locator(".cm-inline-rendered-md").first()).toBeVisible();
+
+    // Covers the gap between a doc-shaping edit and the next rAF re-project — e.g. another user
+    // deletes a block above your cursor and you arrow-key before inlineRefreshEffect lands.
+    // Delete and move selection in one turn; yielding to Playwright would cross that window.
+    await page.evaluate((id) => {
+      const view = window.myst_editor[id].main_editor;
+      const removed = "line one\nline two\n\n".length;
+      view.dispatch({ changes: { from: 0, to: removed }, selection: { anchor: view.state.doc.length - removed } });
+      view.dispatch({ selection: { anchor: 0 } });
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "!" } });
+    }, id);
+
+    await expectEditorText(page, "- [ ] task\n\ntrailing!");
+  });
 });
 
 test.describe.parallel("Inline mode with concurrent editors", () => {
