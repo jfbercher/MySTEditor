@@ -171,11 +171,26 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
   function computeBlocks() {
     // Shared Preview chunk cache — renderText always refreshes chunks (DOM only when Preview/Both).
     if (!text.chunks.length) text.renderText(true, true);
-    return { byLine: projectHtml(text.chunks.map((c) => c.html).join(""), text.lineMap) };
+    // Fingerprint the chunks' own text, not text.text.value: the blocks below are built from these
+    // chunks, and a chunk can lag the signal, in which case the two describe different documents.
+    const source = text.chunks.map((c) => c.text).join("");
+    return {
+      byLine: projectHtml(text.chunks.map((c) => c.html).join(""), text.lineMap),
+      docLength: source.length,
+      docLines: source.split("\n").length,
+    };
   }
+
+  /** Whether the blocks still describe `state`'s document. */
+  const projectionMatches = (state) => {
+    const { docLength, docLines } = state.field(blocksField);
+    return docLength === state.doc.length && docLines === state.doc.lines;
+  };
 
   function blockRanges(state) {
     const { byLine } = state.field(blocksField);
+    // Stale blocks hold line numbers the document may no longer have, and doc.line() throws on those.
+    if (!projectionMatches(state)) return [];
     const starts = [...byLine.keys()].sort((a, b) => a - b);
     const ranges = [];
     for (let i = 0; i < starts.length; i++) {
@@ -302,8 +317,11 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
   const decorationsField = StateField.define({
     create: buildDecorations,
     update: (value, tr) => {
-      if (tr.effects.some((e) => e.is(inlineRefreshEffect) || e.is(focusEffect))) return buildDecorations(tr.state);
       if (tr.docChanged) return value.map(tr.changes);
+      // Keep the current widgets while the blocks describe an older document: rebuilding from them
+      // would drop every widget until the next render lands.
+      if (!projectionMatches(tr.state)) return value;
+      if (tr.effects.some((e) => e.is(inlineRefreshEffect) || e.is(focusEffect))) return buildDecorations(tr.state);
       if (!tr.selection) return value;
       const from = blockAt(tr.startState, tr.startState.selection)?.from;
       return from === blockAt(tr.state, tr.selection)?.from ? value : buildDecorations(tr.state);
@@ -321,22 +339,16 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
   const enterJumpedBlock = EditorState.transactionFilter.of((tr) => {
     if (!tr.selection || tr.docChanged) return tr;
     if (tr.annotation(Transaction.userEvent) !== "select") return tr;
-    const ranges = blockRanges(tr.startState);
     const prev = tr.startState.selection.main;
     const next = tr.selection.main;
     if (prev.head === next.head) return tr;
 
-    const forward = next.head > prev.head;
-    const lo = Math.min(prev.head, next.head);
-    const hi = Math.max(prev.head, next.head);
-    const candidates = ranges.filter((b) => {
-      if (selectionTouchesBlock(tr.startState.selection, b, tr.startState.doc)) return false;
-      return b.to > lo && b.from < hi;
-    });
-    if (candidates.length === 0) return tr;
+    // Only nudge a caret that would end up *inside* a rendered block, to that block's near edge.
+    // Anything else (Home/End/PageUp, or a step that lands on a boundary) must keep its destination.
+    const target = blockRanges(tr.startState).find((b) => next.head > b.from && next.head < b.to);
+    if (!target || selectionTouchesBlock(tr.startState.selection, target, tr.startState.doc)) return tr;
 
-    const closest = forward ? candidates.reduce((a, b) => (a.from <= b.from ? a : b)) : candidates.reduce((a, b) => (a.to >= b.to ? a : b));
-    const head = forward ? closest.from : closest.to;
+    const head = next.head > prev.head ? target.from : target.to;
     return {
       selection: next.empty ? EditorSelection.cursor(head) : EditorSelection.range(next.anchor, head),
       effects: focusEffect.of(true),
