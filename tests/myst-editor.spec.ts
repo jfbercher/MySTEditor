@@ -839,8 +839,7 @@ test.describe.parallel("Inline mode document/projection consistency", () => {
       const view = window.myst_editor[id].main_editor;
       const removed = "line one\nline two\n\n".length;
       view.dispatch({ changes: { from: 0, to: removed }, selection: { anchor: view.state.doc.length - removed } });
-      view.dom.querySelector(".cm-inline-rendered-md input[type=checkbox]")
-        ?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      view.dom.querySelector(".cm-inline-rendered-md input[type=checkbox]")?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     }, id);
 
     await expectEditorText(page, "- [x] task\n\ntrailing");
