@@ -294,7 +294,11 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
       );
     }
 
-    return Decoration.set(decorations);
+    // A blank line belongs to no block, so the loop above skips it. Keep the caret's line as source
+    // regardless, or its whitespace is laid out in the preview font and the caret looks misplaced.
+    if (focused) decorations.push(Decoration.line({ class: "cm-inline-source-line" }).range(state.doc.lineAt(state.selection.main.head).from));
+
+    return Decoration.set(decorations, true);
   }
 
   const focusedField = StateField.define({
