@@ -754,6 +754,140 @@ test.describe.parallel("MystEditorGit wrapper", () => {
   });
 });
 
+/**
+ * Inline mode projects TextManager's chunks (rendered from a debounced signal) onto the live
+ * document, so anything reshaping the document faster than the projection can follow - undo,
+ * multi-line edits, a remote peer's changes - risks the projection describing a document that no
+ * longer exists. These drive real keys, because list continuation and indentation come from keymaps.
+ */
+test.describe.parallel("Inline mode document/projection consistency", () => {
+  test.beforeEach(async ({ page }) => {
+    await applyPageOpts(page, { collab: "false" });
+    await startInlineMode(page);
+    await clearEditor(page);
+    await page.locator(".cm-content").click();
+  });
+
+  test("Undoing a nested list edit does not break the editor", async ({ page }) => {
+    await page.keyboard.type("* foo");
+    await page.keyboard.press("Enter");
+    // Tab indents (indentWithTab). The markdown keymap that would continue the list is a user
+    // setting and off by default, so the document is exactly what was typed.
+    await page.keyboard.press("Tab");
+    await page.keyboard.type("* baz");
+    await expect(page.locator(".cm-inline-rendered-md").first()).toBeVisible();
+    await expectEditorText(page, "* foo\n  * baz");
+
+    await page.keyboard.press("Control+z");
+    await expectEditorText(page, "* foo\n");
+
+    // Still editable afterwards: a thrown projection error leaves the editor dead.
+    await page.keyboard.type("qux");
+    await expectEditorText(page, "* foo\nqux");
+  });
+
+  test("Repeated undo/redo of multi-line edits keeps rendering", async ({ page }) => {
+    // A paragraph that only ends at the blank line, then a list - both span several source lines.
+    await page.keyboard.type("first line\nsecond line\nthird line\n\n* item one\n* item two");
+    await expect(page.locator(".cm-inline-rendered-md").first()).toBeVisible();
+
+    // How far each step rewinds is not asserted: history groups changes by time (500ms by default),
+    // so the number of edits per undo depends on how fast the keystrokes above were delivered.
+    for (let i = 0; i < 6; i++) await page.keyboard.press("Control+z");
+    for (let i = 0; i < 3; i++) await page.keyboard.press("Control+y");
+
+    // Whatever it rewound to, the editor must still accept input and render.
+    await clearEditor(page);
+    await page.keyboard.type("* after churn\n\nsecond block");
+    await expectEditorText(page, "* after churn\n\nsecond block");
+    // The caret is in the last block, which stays as source, so the first block must be rendered.
+    await expect(page.locator(".cm-inline-rendered-md").first()).toBeVisible();
+  });
+
+  test("Every source line of a soft-wrapped paragraph stays a real line", async ({ page }) => {
+    await page.keyboard.type("alpha\nbeta\ngamma");
+    await expectEditorText(page, "alpha\nbeta\ngamma");
+
+    // Otherwise the caret and the gutter lose track of the lines inside the paragraph.
+    await expect(page.locator(".cm-content .cm-line")).toHaveCount(3);
+  });
+
+  test("Extending a selection across rendered blocks keeps the anchor", async ({ page }) => {
+    await page.keyboard.type("* one\n* two\n* three");
+    await page.keyboard.press("Control+Home");
+    for (let i = 0; i < 3; i++) await page.keyboard.press("Shift+ArrowDown");
+
+    const { anchor, head } = await page.evaluate((id) => {
+      const sel = window.myst_editor[id].main_editor.state.selection.main;
+      return { anchor: sel.anchor, head: sel.head };
+    }, id);
+    // Collapsed means the jump-over-widget filter dropped the anchor.
+    expect(head).not.toBe(anchor);
+    expect(anchor).toBe(0);
+  });
+});
+
+test.describe.parallel("Inline mode with concurrent editors", () => {
+  const openPair = async (context: { newPage: () => Promise<Page> }) => {
+    const collabOpts = defaultCollabOpts();
+    const pageA = await applyPageOpts(await context.newPage(), collabOpts);
+    const pageB = await applyPageOpts(await context.newPage(), collabOpts);
+    await startInlineMode(pageA);
+    await startInlineMode(pageB);
+    await clearEditor(pageA);
+    return { pageA, pageB };
+  };
+
+  const expectConverged = (pageA: Page, pageB: Page) =>
+    expect(async () => {
+      const textA = await pageA.evaluate((id) => window.myst_editor[id].text, id);
+      const textB = await pageB.evaluate((id) => window.myst_editor[id].text, id);
+      expect(textB).toBe(textA);
+    }).toPass();
+
+  test("One peer's undo does not break the other peer's editor", async ({ context }) => {
+    const { pageA, pageB } = await openPair(context);
+
+    await pageA.locator(".cm-content").click();
+    const shared = "* shared one\n* shared two\n\nparagraph line\nsecond line";
+    await pageA.keyboard.type(shared);
+    await expectEditorText(pageB, shared);
+
+    // A undoes while B types: B is re-projecting while remote changes reshape its document.
+    await pageB.locator(".cm-content").click();
+    await pageB.keyboard.press("Control+End");
+    for (let i = 0; i < 5; i++) {
+      await pageA.keyboard.press("Control+z");
+      await pageB.keyboard.type("B");
+    }
+
+    // The churned-up result itself is not asserted, as it depends on how A's undos and B's inserts
+    // interleave. What matters is that A still accepts input and both peers agree on the outcome -
+    // convergence alone would not show the former, since two frozen editors also agree.
+    await pageA.keyboard.type("A-END");
+    await expectEditorText(pageA, "A-END", { exact: false });
+    await expectConverged(pageA, pageB);
+  });
+
+  test("Concurrent multi-line edits converge and keep rendering", async ({ context }) => {
+    const { pageA, pageB } = await openPair(context);
+
+    await pageA.locator(".cm-content").click();
+    await pageA.keyboard.type("start\n");
+    await expect(async () => {
+      expect(await pageB.evaluate((id) => window.myst_editor[id].text, id)).toContain("start");
+    }).toPass();
+
+    await pageB.locator(".cm-content").click();
+    await pageB.keyboard.press("Control+End");
+    await Promise.all([pageA.keyboard.type("\n* a1\n* a2\n\npara a"), pageB.keyboard.type("\n* b1\n* b2\n\npara b")]);
+
+    await expectConverged(pageA, pageB);
+    await expect(pageA.locator(".cm-inline-rendered-md").first()).toBeVisible();
+    await expect(pageB.locator(".cm-inline-rendered-md").first()).toBeVisible();
+  });
+});
+
 test("dist/MystEditor.js exports src/MystEditor.js module", async () => {
   const module = await fs.readFile("dist/MystEditor.js");
   expect(module.length).toBeGreaterThan(3000);
@@ -767,6 +901,17 @@ test("dist/MystEditor.js exports src/MystEditor.js module", async () => {
 
 const insertToMainEditor = (page: Page, changes: ChangeSpec | null): Promise<void> /** @ts-ignore */ =>
   page.evaluate(({ changes, id }) => window.myst_editor[id].main_editor.dispatch({ changes }), { changes, id });
+
+/**
+ * Waits for the editor's text to settle on `expected` - or, with `exact: false`, to contain it.
+ * Retrying is needed because the text trails the document, being updated from a debounced signal.
+ */
+const expectEditorText = (page: Page, expected: string, { exact = true } = {}) =>
+  expect(async () => {
+    const text = await page.evaluate((id) => window.myst_editor[id].text, id);
+    if (exact) expect(text).toBe(expected);
+    else expect(text).toContain(expected);
+  }).toPass();
 
 const clearEditor = async (page: Page) => {
   const currentText = await page.evaluate((id) => window.myst_editor[id].text, id);
