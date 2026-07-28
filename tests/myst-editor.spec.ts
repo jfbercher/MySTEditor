@@ -191,10 +191,7 @@ graph TD
       await page.getByTitle("Accept suggestion").first().click();
       await page.getByTitle("Accept suggestion").first().click();
       await page.getByTitle("Accept suggestion").first().click();
-      await expect(async () => {
-        const text = await page.evaluate((id) => window.myst_editor[id].text, id);
-        expect(text).toBe(`# Better heading\nThis is some text.\nThis is some text.`);
-      }).toPass();
+      await expectEditorText(page, `# Better heading\nThis is some text.\nThis is some text.`);
     });
 
     test("Can reject suggestions", async ({ page }) => {
@@ -204,10 +201,7 @@ graph TD
       await page.getByTitle("Reject suggestion").first().click();
       await page.getByTitle("Reject suggestion").first().click();
       await page.getByTitle("Reject suggestion").first().click();
-      await expect(async () => {
-        const text = await page.evaluate((id) => window.myst_editor[id].text, id);
-        expect(text).toBe(`# Heading\nThis some text.\nThis is some text text.`);
-      }).toPass();
+      await expectEditorText(page, `# Heading\nThis some text.\nThis is some text text.`);
     });
 
     test("Can use suggest mode", async ({ page }) => {
@@ -603,10 +597,7 @@ test.describe.parallel("With collaboration enabled", () => {
       await clearEditor(pageA);
       const text0 = "this is room 0";
       await insertToMainEditor(pageA, { from: 0, insert: text0 });
-      await expect(async () => {
-        const text = await pageB.evaluate((id) => window.myst_editor[id].text, id);
-        expect(text).toBe(text0);
-      }).toPass();
+      await expectEditorText(pageB, text0);
 
       const text1 = "this is room 1";
       const room1 = collabOpts.room + "1";
@@ -614,21 +605,12 @@ test.describe.parallel("With collaboration enabled", () => {
       await changeRoom(pageA, room1);
       await clearEditor(pageA);
       await insertToMainEditor(pageA, { from: 0, insert: text1 });
-      await expect(async () => {
-        const text = await pageA.evaluate((id) => window.myst_editor[id].text, id);
-        expect(text).toBe(text1);
-      }).toPass();
+      await expectEditorText(pageA, text1);
 
-      await expect(async () => {
-        const text = await pageB.evaluate((id) => window.myst_editor[id].text, id);
-        expect(text).toBe(text0);
-      }).toPass();
+      await expectEditorText(pageB, text0);
       // B - join room 1
       await changeRoom(pageB, room1);
-      await expect(async () => {
-        const text = await pageB.evaluate((id) => window.myst_editor[id].text, id);
-        expect(text).toBe(text1);
-      }).toPass();
+      await expectEditorText(pageB, text1);
     });
   });
 
