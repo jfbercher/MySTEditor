@@ -1,3 +1,47 @@
+
+This is a fork of [antmicro Myst-Editor](https://github.com/antmicro/myst-editor/). A number of adaptations and additions have been made to extend its capabilities for local document authoring and scientific editing. Original doc below. 
+
+# Additions
+
+## Local File Management
+
+A dedicated menu bar has been added for managing documents locally:
+
+* **Open local files**, with recent-file history and quick open
+* **Save** and **Save As**
+* **Automatic saving**, with a configurable interval in `config.json`
+* **Working directory** management, used for **local image insertion**
+
+## Scientific Authoring
+
+The fork provides extended support for scientific and technical documents, including:
+
+* **$\LaTeX$ equation support** via KaTeX
+* **YAML frontmatter management**, presented as a collapsible section, for bibliographic references and MyST-specific settings
+* **BibTeX bibliography support**, with a dedicated bibliography section
+
+  * Two preview formats: **numeric** and **author–date**
+  * Customizable bibliography rendering template
+* **Numbering and cross-referencing** of equations, tables, and figures, which can be enabled or disabled independently
+* **Customizable reference format** through the YAML frontmatter
+* Reference-target **preview popovers**, displaying the rendered figure, equation, or table
+* Support for markdown **footnotes**
+* **Comments**, with any line beginning with `%` ignored in the preview
+* **Enhanced admonitions**, with support for titles, dropdowns, and parameters such as `open`, `align`, etc.
+* **Figure and table**: support for alignment and scaling
+
+## Document Organization and Navigation
+
+* **Table of contents** displayed as a collapsible and resizable panel on the left
+* **Drag-and-drop reorganization** of document sections directly from the table of contents
+* **Multi-document editing** through a tabbed interface
+
+## Theming
+
+* **CodeMirror theme** support
+* **Light and dark themes** for both the editor and preview
+
+
 # MyST Editor
 
 Copyright (c) 2022-2026 [Antmicro](https://antmicro.com)
