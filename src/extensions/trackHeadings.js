@@ -1,7 +1,25 @@
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorState, StateField } from "@codemirror/state";
 
+
 export const trackHeadings = (headings) =>
+  StateField.define({
+    create(state) {
+      const headingsFlat = getHeadingsFlat(state);
+      headings.value = nestHeadings(headingsFlat);
+    },
+    update(_, tr) {
+      if (!tr.docChanged) return;
+
+      const headingsFlat = getHeadingsFlat(tr.state);
+      headings.value = nestHeadings(headingsFlat);
+    },
+  });
+
+// unoptimized (version above ; because the optimized version only detects 
+// modification on headings themself, not their positions, and we need positions for section labels.
+
+export const trackHeadingsOld = (headings) =>
   StateField.define({
     create(state) {
       const headingsFlat = getHeadingsFlat(state);
@@ -56,7 +74,7 @@ function getHeadingsFlat(/** @type {EditorState} */ state) {
   return headingsFlat;
 }
 
-function nestHeadings(headingsFlat) {
+/* function nestHeadings(headingsFlat) {
   const headingsNested = [];
   const levelMap = {};
   headingsFlat.forEach((h) => {
@@ -72,4 +90,36 @@ function nestHeadings(headingsFlat) {
     levelMap[h.level] = newItem;
   });
   return headingsNested;
-}
+} */
+
+ function nestHeadings(headingsFlat) {
+  const headingsNested = [];
+  const levelMap = {};
+  headingsFlat.forEach((h) => {
+    const newItem = { ...h, children: [] };
+
+    // Find the closest relative among the strictly lower levels, 
+    // not just h.level - 1, to manage "skipped" levels (ex: ## then ####).
+    let parent = null;
+    for (let lvl = h.level - 1; lvl >= 1; lvl--) {
+      if (levelMap[lvl]) {
+        parent = levelMap[lvl];
+        break;
+      }
+    }
+
+    if (h.level === 1 || !parent) {
+      headingsNested.push(newItem);
+    } else {
+      parent.children.push(newItem);
+    }
+
+    // Cleans deeper levels: new invalid level N title invalids
+    // any old "last title" of level > N as a parentage reference.
+    Object.keys(levelMap).forEach((lvl) => {
+      if (parseInt(lvl) >= h.level) delete levelMap[lvl];
+    });
+    levelMap[h.level] = newItem;
+  });
+  return headingsNested;
+} 

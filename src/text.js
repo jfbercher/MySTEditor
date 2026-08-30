@@ -2,12 +2,14 @@ import { computed, effect, signal } from "@preact/signals";
 import markdownIt from "markdown-it";
 import markdownitDocutils, { directivesDefault } from "markdown-it-docutils";
 import newDirectives from "./markdown/markdownDirectives";
-import { markdownReplacer, useCustomDirectives, useCustomRoles } from "./markdown/markdownReplacer";
+import { titledAdmonitions } from "./markdown/markdownDirectives"; // au lieu de l'ancien import figé
+// import titledAdmonitions from "./markdown/markdownTitledAdmonitions";
+import { markdownReplacer, useCustomDirectives, useCustomRoles, mystComments } from "./markdown/markdownReplacer";
 import markdownMermaid from "./markdown/markdownMermaid";
 import markdownSourceMap from "./markdown/markdownSourceMap";
 import { checkLinks } from "./markdown/markdownLinks";
 import { colonFencedBlocks } from "./markdown/markdownFence";
-import { markdownItMapUrls } from "./markdown/markdownUrlMapping";
+import { markdownItMapUrls, overloadMapUrl } from "./markdown/markdownUrlMapping";
 import { backslashLineBreakPlugin } from "./markdown/markdownLineBreak";
 import IMurMurHash from "imurmurhash";
 import purify from "dompurify";
@@ -17,10 +19,40 @@ import yamlHighlight from "highlight.js/lib/languages/yaml";
 import { markdownCheckboxes } from "./markdown/markdownCheckboxes";
 import { criticMarkup } from "./markdown/markdownCriticMarkup";
 import { markdownFrontmatter } from "./markdown/markdownFrontmatter";
+import markdownItMath, { scanTargets } from "./markdown/markdownMath";
+import { extractFrontmatter } from "./markdown/frontmatterUtils";
+import { updateMathMacros, getMacrosSignature } from "./markdown/markdownMath";
+import { numberHeadings, flattenToLineMap } from "./utils/headingNumbering";
+import markdownItHeadings from "./markdown/markdownHeadings";
+import { getSectionLabelsSignature, getNumberingConfig } from "./markdown/markdownMath";
+import { scanFootnotes, markdownItFootnoteRefs, markdownItFootnoteDefs, renderFootnotesSection } from "./markdown/markdownFootnotes";
+import {
+  ensureBibliographyLoaded,
+  scanCitations,
+  markdownItCitations,
+  markdownItBibliographyMarker,
+  renderBibliographySection,
+  getBibEntries,
+} from "./markdown/bibliography";
+import { invalidatePreviewMapCache } from "./utils/previewPopup";
+import { moveSectionInText, flattenHeadingsWithLines, computeSectionRange } from "./utils/sectionReorder";
+
+window.moveSectionInText = moveSectionInText;
+window.flattenHeadingsWithLines = flattenHeadingsWithLines;
+window.testMoveSectionInText = moveSectionInText;
+window.testFlattenHeadingsWithLines = flattenHeadingsWithLines;
+window.testComputeSectionRange = computeSectionRange;
+// ou directement en copiant la fonction dans un scratch pad
+
+
+
+
+
 
 export const markdownUpdatedEffect = StateEffect.define();
 /** Re-project Inline widgets after external data changes (transforms that don't touch the doc text). */
 export const inlineRefreshEffect = StateEffect.define();
+
 
 hljs.registerLanguage("yaml", yamlHighlight);
 
@@ -31,13 +63,15 @@ export class TextManager {
   /** @type {{ useCache: boolean, staleInputs: Set<string> } | null} */
   #renderPending = null;
 
-  constructor({ initialText, editorView, cache, options, userSettings, cleanups }) {
+  constructor({ initialText, editorView, cache, options, userSettings, headings, cleanups }) {
+    this.headings = headings;
     this.text = signal(initialText.peek());
     this.lineMap = new Map();
     this.chunks = [];
     this.editorView = editorView;
     this.preview = signal(null);
     this.options = options;
+    this.userSettings = userSettings;
     this.md = computed(() => {
       const md = markdownIt({
         breaks: true,
@@ -55,18 +89,30 @@ export class TextManager {
           }
         },
       })
-        .use(markdownitDocutils, { directives: { ...directivesDefault, ...newDirectives } })
+        //.use(markdownitDocutils, { directives: { ...directivesDefault, ...newDirectives } })
+        //.use(markdownitDocutils, { directives: finalDirectives })
+        .use(markdownitDocutils, { directives: { ...directivesDefault, ...titledAdmonitions, ...newDirectives } })
         .use(markdownReplacer(options.transforms.value, cache.transform))
+        .use(mystComments)
         .use(useCustomRoles(options.customRoles.value, cache.transform))
         .use(useCustomDirectives(options.customDirectives.value, cache.transform))
         .use(markdownMermaid, { lineMap: this.lineMap, parent: options.parent, theme: options.mermaidTheme.value })
+        .use(markdownItMath, this.options.id.value)
         .use(markdownSourceMap)
+        .use(markdownItHeadings)
+        .use(markdownItFootnoteDefs)
+        .use(markdownItFootnoteRefs)
+        .use(markdownItBibliographyMarker)
+        .use(markdownItCitations)
         .use(checkLinks)
         .use(colonFencedBlocks)
-        .use(markdownItMapUrls, options.mapUrl.value)
+        //.use(markdownItMapUrls, options.mapUrl.value)
+        .use(markdownItMapUrls, overloadMapUrl(cache.transform)(options.mapUrl.value))
         .use(markdownCheckboxes)
         .use(criticMarkup)
         .use(markdownFrontmatter);
+        
+
       if (options.backslashLineBreak.value) md.use(backslashLineBreakPlugin);
       userSettings.value.filter((s) => s.enabled && s.markdown).forEach((s) => md.use(s.markdown));
 
@@ -152,6 +198,7 @@ export class TextManager {
     this.chunks = newChunks;
     this.lastMd = this.md.value;
     this.lastMode = this.options.mode.value;
+    invalidatePreviewMapCache(this.options.id.value);
   }
 
   /**
@@ -183,7 +230,58 @@ export class TextManager {
   }
 
   splitTextIntoChunks(chunkLookup = {}) {
-    return this.text.value
+    const fmResult = extractFrontmatter(this.text.value);
+    updateMathMacros(this.options.id.value, fmResult?.frontmatter);
+    const macrosSignature = getMacrosSignature(this.options.id.value);
+    //
+    //const refsKindLabel = getKindLabel(fmResult?.frontmatter)
+    const { kindLabel, numberingEnabled } = getNumberingConfig(fmResult?.frontmatter);
+
+    // bibliography
+
+    const bibliographyPath = fmResult?.frontmatter?.bibliography;
+    const citationStyle = fmResult?.frontmatter?.["citation-style"] || "numeric";
+    const citationTemplate = fmResult?.frontmatter?.["citation-template"];
+    const numberingFrontmatter = fmResult?.frontmatter?.["numbering"];
+    const numberingSectionsFrontmatter = fmResult?.frontmatter?.["numbering"]?.["headings"];
+    const numberingSignature = JSON.stringify(numberingFrontmatter)
+
+    const numberingSetting = this.userSettings.value.find(
+      s => s.id === "number-headers"
+    );
+
+    if (numberingSectionsFrontmatter !== undefined && numberingSetting) {
+      numberingSetting.enabled = numberingSectionsFrontmatter;
+    }
+
+    ensureBibliographyLoaded(this.options.id.value, bibliographyPath, () => this.options.getBibliographyDirectory.value?.(), () => this.rerender());
+
+    const { citeMap } = scanCitations(this.text.value, getBibEntries(this.options.id.value), citationStyle);
+    const citationsSignature = [...citeMap.entries()].map(([k, v]) => `${k}:${v.number}:${v.entry?.year}`).join("|");
+
+     // for headings numbering
+    const numberingSectionsActive = this.userSettings.value.find((s) => s.id === "number-headers")?.enabled ?? false;
+    const numberedHeadings = numberHeadings(this.headings.value);
+    const headingByLine = flattenToLineMap(numberedHeadings, this.text.value);
+    const headingMap = { byLine: headingByLine, active: numberingSectionsActive };
+
+    const { byLine, byLabel, targets } = scanTargets(this.text.value, numberingEnabled, headingMap);
+    const refMap = { byLine, byLabel };
+
+    const sectionLabelsSignature = getSectionLabelsSignature(byLabel);
+
+    const { footnoteMap } = scanFootnotes(this.text.value);
+    const footnotesSignature = [...footnoteMap.entries()].map(([l, i]) => `${l}:${i.number}:${i.content}`).join("|");
+
+    this.refMap = refMap; // exposed for external use (e.g. label resolution -> line in Inline mode)
+    this.headingMap = headingMap; // same, for headings if necessary
+    this.citeMap = citeMap;
+    this.footnoteMap = footnoteMap;
+    this.citationTemplate = citationTemplate;
+    this.kindLabel = kindLabel;
+    this.numberingEnabled = numberingEnabled;
+
+    const realChunks = this.text.value
       .split(/(?=\n#{1,3} )/g)
       .reduce((chunks, textChunk) => {
         const lastChunkIdx = chunks.length - 1;
@@ -205,9 +303,13 @@ export class TextManager {
         return chunks;
       }, [])
       .map(({ text, startLine, endLine }, chunkId) => {
-        // Include startLine so a later chunk isn't reused with stale absolute line ids after an
-        // earlier chunk grows/shrinks.
-        const hash = new IMurMurHash(`${text}\0${chunkId}\0${startLine}`, 42).result();
+        const headingSignature = numberingSectionsActive ? "on" : "off";
+
+        const hash = new IMurMurHash(
+        //  `${text}\0${chunkId}\0${startLine}\0${macrosSignature}\0${headingSignature}\0${sectionLabelsSignature}\0${footnotesSignature}\0${citationsSignature}\0${numberingFrontmatter}`,
+         `${text}\0${chunkId}\0${startLine}\0${macrosSignature}\0${headingSignature}\0${sectionLabelsSignature}\0${footnotesSignature}\0${citationsSignature}\0${numberingSignature}`,
+        42,
+        ).result();
 
         if (!(hash in chunkLookup)) {
           for (let l = startLine; l <= endLine; l++) {
@@ -216,10 +318,63 @@ export class TextManager {
         }
 
         const html =
-          chunkLookup[hash]?.html || sanitize(this.md.value.render(text, { chunkId, startLine, lineMap: this.lineMap, view: this.editorView.value }));
+          chunkLookup[hash]?.html ||
+          sanitize(
+            this.md.value.render(text, {
+              chunkId,
+              startLine,
+              lineMap: this.lineMap,
+              view: this.editorView.value,
+              refMap,
+              docutils: { targets },
+              headingMap,
+              footnoteMap,
+              citeMap, 
+              citationStyle,
+              citationTemplate,
+              kindLabel,
+              numberingEnabled,
+            }),
+          );
         return { text, hash, id: chunkId, html, oldId: chunkLookup[hash]?.oldId, startLine, endLine };
       });
-  }
+
+    if (footnoteMap.size > 0) {
+      const footnotesHash = `footnotes-${footnotesSignature}`;
+      const footnotesHtml = chunkLookup[footnotesHash]?.html || renderFootnotesSection(footnoteMap, this.md.value);
+      const lastChunk = realChunks[realChunks.length - 1];
+      realChunks.push({
+        text: "",
+        hash: footnotesHash,
+        id: realChunks.length,
+        html: footnotesHtml,
+        oldId: chunkLookup[footnotesHash]?.oldId,
+        startLine: (lastChunk?.endLine ?? 0) + 1,
+        endLine: (lastChunk?.endLine ?? 0) + 1,
+      });
+    }
+
+    if (citeMap.size > 0) {
+      const alreadyPlaced = realChunks.some((c) => c.html.includes('class="bibliography"'));
+      if (!alreadyPlaced) {
+        const bibHash = `bibliography-${citationsSignature}`;
+        const bibHtml = chunkLookup[bibHash]?.html || renderBibliographySection(citeMap, citationStyle, citationTemplate, this.md.value);
+        const lastChunk = realChunks[realChunks.length - 1];
+        realChunks.push({
+          text: "",
+          hash: bibHash,
+          id: realChunks.length,
+          html: bibHtml,
+          oldId: chunkLookup[bibHash]?.oldId,
+          startLine: (lastChunk?.endLine ?? 0) + 1,
+          endLine: (lastChunk?.endLine ?? 0) + 1,
+        });
+      }
+    }
+
+    return realChunks;
+}
+
 
   shiftLineMap(update) {
     if (update.startState.doc.lines === update.state.doc.lines) return;
@@ -277,10 +432,11 @@ export class TextManager {
 
 const countOccurences = (str, pattern) => (str?.match(pattern) || []).length;
 
+
 export function sanitize(unsafeHTML) {
   return purify.sanitize(unsafeHTML, {
-    // Taken from Mermaid JS settings: https://github.com/mermaid-js/mermaid/blob/dd0304387e85fc57a9ebb666f89ef788c012c2c5/packages/mermaid/src/mermaidAPI.ts#L50
     ADD_TAGS: ["foreignobject", "iframe"],
     ADD_ATTR: ["dominant-baseline", "target"],
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|ftp|mailto|tel|blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
   });
 }

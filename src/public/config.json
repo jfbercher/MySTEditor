@@ -1,0 +1,8 @@
+{
+  "suspendAfterMs": 3600000,
+  "checkIntervalMs": 300000,
+  "autosaveIntervalMs": 60000,
+  "recentFilesMax": 10,
+  "defaultFileName": "Untitled.md",
+  "fallbackImage": "https://upload.wikimedia.org/wikipedia/commons/a/a3/Image-not-found.png"
+}

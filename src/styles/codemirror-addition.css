@@ -1,0 +1,66 @@
+/*.tok-heading { color: #0550ae !important; font-weight: 600 !important; }
+.tok-meta { color: #6e7781 !important; }
+.tok-link { color: #0969da !important; }
+.tok-url { color: #116329 !important; text-decoration: underline !important; }
+.tok-labelName { color: #8250df !important; font-weight: 600 !important; }
+.tok-keyword { color: #cf222e !important; }
+.tok-string { color: #0a3069 !important; }
+.tok-comment { color: #6e7781 !important; font-style: italic !important; }
+.tok-strong { font-weight: bold !important; }
+.tok-emphasis { font-style: italic !important; }
+*/
+
+.tok-heading {
+  color: var(--tok-heading) !important;
+  font-weight: 600 !important;
+}
+
+.tok-meta {
+  color: var(--tok-meta) !important;
+}
+
+.tok-link {
+  color: var(--tok-link) !important;
+}
+
+.tok-url {
+  color: var(--tok-url) !important;
+  text-decoration: underline !important;
+}
+
+.tok-labelName {
+  color: var(--tok-label) !important;
+  font-weight: 600 !important;
+}
+
+.tok-keyword {
+  color: var(--tok-keyword) !important;
+}
+
+.tok-string {
+  color: var(--tok-string) !important;
+}
+
+.tok-comment {
+  color: var(--tok-comment) !important;
+  font-style: italic !important;
+}
+
+.tok-strong {
+  font-weight: bold !important;
+}
+
+.tok-emphasis {
+  font-style: italic !important;
+}
+
+.cm-cursor,
+.cm-cursor-primary {
+  border-left-width: 2px !important;
+  border-left-color: var(--editor-cursor) !important;
+}
+
+.cm-dropCursor {
+  border-left-width: 2px !important;
+  border-left-color: var(--editor-cursor) !important;
+}

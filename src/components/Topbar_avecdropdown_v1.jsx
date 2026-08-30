@@ -1,5 +1,5 @@
 import { styled } from "styled-components";
-import { useContext, useMemo, useState, useEffect } from "preact/hooks";
+import { useContext, useMemo } from "preact/hooks";
 import purify from "dompurify";
 
 import { DefaultButton } from "./CommonUI";
@@ -43,24 +43,11 @@ const Topbar = styled.div`
   .btns {
     display: flex;
     gap: 10px;
-
-    /* Pour les dropdowns gérés en JS */
-    .dropdown-container {
-      position: relative;
-      display: flex;
-      align-items: center;
-    }
-
-    /* Pour les dropdowns natifs CSS (comme ButtonGroup / "more") */
-    > div {
-      position: relative;
-      display: flex;
-      align-items: center;
-
-      &:hover .btn-dropdown {
-        display: block;
-      }
-    }
+  }
+  
+  /* Make each button container relative */
+  .btns > div {
+    position: relative;
   }
 
   svg > path.inner-copy {
@@ -75,13 +62,26 @@ const Topbar = styled.div`
     }
   }
 
+  /* Conteneur pour les boutons texte avec dropdown */
+  .text-btn-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+
+    /* Affiche le menu au survol du bouton ou du menu lui-même */
+    &:hover .btn-dropdown {
+      display: block;
+    }
+  }
+
   .btn-dropdown {
     position: absolute;
     top: 100%;
-    left: 0;
-    padding-top: 6px;
+    left: 0; /* Alignement à gauche par défaut pour les boutons de gauche */
+    padding-top: 10px;
+    display: none;
     z-index: 20;
-    display: none; /* Masqué par défaut pour les dropdowns purement CSS */
+
 
     &:hover {
       display: block;
@@ -99,12 +99,7 @@ const Topbar = styled.div`
     }
   }
 
-  /* Force l'affichage quand le wrapper JS injecte le composant */
-  .dropdown-container .btn-dropdown {
-    display: block;
-  }
-
-  /* Alignement à droite pour le panneau de droite */
+  /* 2. Align right only for buttons on the right side of the bar */
   .side:last-child .btn-dropdown {
     left: auto;
     right: 0;
@@ -158,7 +153,7 @@ const Subtitle = styled.div`
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--editor-subtitle);
+  color: var(--gray-800);
 
   a {
     color: var(--accent-dark);
@@ -188,6 +183,10 @@ export const TopbarButton = styled(DefaultButton)`
   border: ${(props) => (props.active ? "1px solid var(--accent)" : "1px solid var(--border)")};
   background-color: ${(props) => (props.active ? "var(--accent)" : "var(--button-bg)")};
   width: 40px;
+
+  &:hover ~ .btn-dropdown {
+    display: block;
+  }
 `;
 
 const ExitIcon = () => (
@@ -247,7 +246,7 @@ const PrintPDFIcon = () => (
     <path stroke-width="0.2" d="M21 12.4286V11H16.7143V18.1429H18.1429V15.2857H20.2857V13.8571H18.1429V12.4286H21Z" fill="currentColor" />
     <path
       stroke-width="0.2"
-      d="M13.1428 18.1429H10.2857V11H13.1428C14.3571 11 15.2857 11.9286 15.2857 13.1429V16C15.2857 17.2143 14.3571 18.1429 13.1428 18.1429ZM11.7143 16.7143H13.1428C13.5714 16.7143 13.8571 12.4286 13.1428 12.4286H11.7143V16.7143Z"
+      d="M13.1428 18.1429H10.2857V11H13.1428C14.3571 11 15.2857 11.9286 15.2857 13.1429V16C15.2857 17.2143 14.3571 18.1429 13.1428 18.1429ZM11.7143 16.7143H13.1428C13.5714 16.7143 13.8571 16.4286 13.8571 16V13.1429C13.8571 12.7143 13.5714 12.4286 13.1428 12.4286H11.7143V16.7143Z"
       fill="currentColor"
     />
     <path
@@ -373,86 +372,11 @@ const icons = {
   "suggest-mode": SuggestIcon,
 };
 
-// Charge dynamiquement les options au survol
-const OptionsDropdown = ({ button, onClose }) => {
-  const [items, setItems] = useState([]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchOptions = async () => {
-      let rawOptions = button.options;
-
-      if (typeof rawOptions === "function") {
-        rawOptions = rawOptions();
-      }
-
-      if (rawOptions && typeof rawOptions.then === "function") {
-        const res = await rawOptions;
-        if (isMounted) setItems(res || []);
-      } else {
-        if (isMounted) setItems(rawOptions?.value || rawOptions || []);
-      }
-    };
-
-    fetchOptions();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [button]);
-
-  return (
-    <>
-      {items.map((option, idx) => (
-        <button
-          key={option.id || idx}
-          className="dropdown-item"
-          type="button"
-          onClick={(ev) => {
-            ev.stopPropagation();
-            onClose();
-            option.action?.(option);
-          }}
-        >
-          {option.text || option.label}
-        </button>
-      ))}
-    </>
-  );
-};
-
-// Gère le survol et le montage dynamique du menu pour les boutons custom
-const DropdownButtonWrapper = ({ button, children }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const hasDropdown = Boolean(button.dropdown || button.options);
-
-  if (!hasDropdown) return children;
-
-  return (
-    <div
-      className="dropdown-container"
-      onMouseEnter={() => setIsOpen(true)}
-      onMouseLeave={() => setIsOpen(false)}
-    >
-      {children}
-      {isOpen && (
-        <div className="btn-dropdown">
-          <div className="dropdown-content">
-            {button.dropdown ? button.dropdown() : <OptionsDropdown button={button} onClose={() => setIsOpen(false)} />}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
 export const EditorTopbar = ({ alert, buttons }) => {
   const { options, editorView, collab, suggestMode } = useContext(MystState);
   const titleHtml = useComputed(() => purify.sanitize(renderMdLinks(options.title.value)));
   const subtitleHtml = useComputed(() => purify.sanitize(renderMdLinks(options.subtitle.value)));
   const emptyDiff = useSignal(false);
-
   const editorModeButtons = useComputed(() => {
     const modeButtons = [
       { id: "source", tooltip: "Source", action: () => (options.mode.value = "Source"), icon: SourceIcon },
@@ -476,21 +400,16 @@ export const EditorTopbar = ({ alert, buttons }) => {
 
     return modeButtons;
   });
-
   const clickedId = useComputed(() => editorModeButtons.value.findIndex((b) => b.id[0].toUpperCase() + b.id.slice(1) === options.mode.value));
-
-  const buttonsLeft = useMemo(
-    () => buttons.map((b) => ({ ...b, icon: b.icon || icons[b.id] })).filter((b) => b.icon),
-    [buttons],
-  );
+  const buttonsLeft = useMemo(() => buttons.map((b) => ({ ...b, icon: b.icon || icons[b.id] })).filter((b) => b.icon), [buttons]);
   const textButtons = useMemo(() => buttons.filter((b) => b.text), [buttons]);
 
   return (
     <Topbar id="topbar">
       <div className="side">
-        <div className="btns">
+        <div class="btns">
           {buttonsLeft.map((button) => (
-            <DropdownButtonWrapper key={button.id} button={button}>
+            <div key={button.id}>
               <TopbarButton
                 className="icon"
                 active={button.active?.({ suggestMode })}
@@ -501,7 +420,12 @@ export const EditorTopbar = ({ alert, buttons }) => {
               >
                 {typeof button.icon == "function" ? <button.icon /> : <img src={button.icon} />}
               </TopbarButton>
-            </DropdownButtonWrapper>
+              {button.dropdown && (
+                <div className="btn-dropdown">
+                  <div className="dropdown-content">{button.dropdown()}</div>
+                </div>
+              )}
+            </div>
           ))}
         </div>
         {alert.value && <Alert className="topbar-alert"> {alert} </Alert>}
@@ -522,13 +446,36 @@ export const EditorTopbar = ({ alert, buttons }) => {
         {collab.value && <Avatars />}
         {textButtons.length > 0 && (
           <div className="btns">
-            {textButtons.map((b) => (
-              <DropdownButtonWrapper key={b.id} button={b}>
-                <DefaultButton type="button" onClick={b.action} title={b.tooltip}>
-                  {b.text}
-                </DefaultButton>
-              </DropdownButtonWrapper>
-            ))}
+            {textButtons.map((b) => {
+              const hasOptions = b.options && b.options.length > 0;
+              return (
+                <div key={b.id} className={hasOptions ? "text-btn-container" : ""}>
+                  <DefaultButton type="button" onClick={b.action} title={b.tooltip}>
+                    {b.text}
+                  </DefaultButton>
+
+                  {hasOptions && (
+                    <div className="btn-dropdown">
+                      <div className="dropdown-content">
+                        {b.options.map((option, idx) => (
+                          <button
+                            key={option.id || idx}
+                            className="dropdown-item"
+                            type="button"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              option.action?.(option);
+                            }}
+                          >
+                            {option.text || option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         {options.showModeButtons.value && <ButtonGroup buttons={editorModeButtons} clickedId={clickedId.value} mainButtonsNum={4} />}

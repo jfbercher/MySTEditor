@@ -1,0 +1,16 @@
+.bib-sep { margin-top: 2em; }
+.bib-list {
+  list-style: none !important;
+  padding-left: 0 !important;
+  font-size: 0.9em; 
+}
+
+.bib-number::before {
+  content: "[";
+}
+
+.bib-number::after {
+  content: "] ";
+}
+.citation-ref { text-decoration: none; }
+.citation-backref { text-decoration: none; margin-left: 0.3em; }

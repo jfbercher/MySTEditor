@@ -213,4 +213,17 @@ const useCustomDirectives = (transforms, cache) => (markdownIt) => {
   markdownIt.use(directivePlugin, { directives: customDirectives });
 };
 
-export { markdownReplacer, useCustomRoles, useCustomDirectives };
+/**
+Removes MyST-style % comment lines before MarkdownIt parses the document.
+This must run before the block parser so that comment lines cannot interfere
+with Markdown syntax on subsequent lines.
+Usage: markdownIt.use(mystComments);
+*/
+
+const mystComments = markdownIt => {
+  markdownIt.core.ruler.before("block", "myst_comments", state => {
+    state.src = state.src.replace(/^[ \t]*%.*(?=\n|$)/gm, "");
+  });
+};
+
+export { markdownReplacer, useCustomRoles, useCustomDirectives,  mystComments  };

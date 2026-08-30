@@ -68,6 +68,11 @@ const defaultUserSettings = [
     extension: closeBrackets(),
   },
   {
+    id: "number-headers",
+    title: "Number headers",
+    enabled: false,
+  },
+  {
     id: "links-new-tab",
     title: "Open links in new tabs",
     enabled: false,
@@ -244,6 +249,8 @@ const defaults = {
   // Called with { state, git } once the git API is ready.
   onReady: null,
   language: "markdown",
+  // biblio
+  getBibliographyDirectory: () => null,
 };
 
 export const modeChangeAnnotation = Annotation.define();

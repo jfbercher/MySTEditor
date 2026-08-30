@@ -3,6 +3,7 @@ import preact from "@preact/preset-vite";
 import { resolve } from "path";
 import macrosPlugin from "vite-plugin-babel-macros";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
+import { filePlugin } from "./vite-file-plugin.js";
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -14,6 +15,7 @@ export default defineConfig({
     nodePolyfills({
       include: ["path"],
     }),
+    filePlugin(),
   ],
   build: {
     outDir: "../dist",

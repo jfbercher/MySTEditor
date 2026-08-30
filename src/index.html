@@ -1,278 +1,96 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <title>MyST editor Demo</title>
-    <link rel="stylesheet" href="./styles/MystEditor.css" />
-    <link rel="icon" href="data:," />
-    <style>
-      body {
-        margin: 0;
-      }
 
-      #myst {
-        height: 100vh;
-      }
-    </style>
-    <script type="module">
-      let exampleText = `# This is MyST Editor
+<head>
+  <title>MyST editor</title>
+  <link rel="stylesheet" href="./styles/MystEditor.css" />
+  <link rel="stylesheet" href="./styles/editor-tabs.css" />
+  <link rel="icon" href="data:," />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+    }
+    #myst { width: 100%; height: 100%; min-width: 0; min-height: 0; }
+    myst-editor {
+      display: block !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      height: 100% !important;
+      box-sizing: border-box;
+    }
+  </style>
 
-A Markdown editor using the [markdown-it parser](https://github.com/markdown-it/markdown-it), based on the [CommonMark specification](https://spec.commonmark.org/0.31.2/).
-We added some extensions so that users can make use of various features of the [MyST Markdown flavor](https://mystmd.org/).
+  <script type="module">
+    import { loadConfig } from "./config.js";
+    import { TabManager } from "./tab_manager.js";
 
-## Admonitions
+    // Dynamic configuration available right here in index.html
+    const urlParams = new URLSearchParams(window.location.search);
+    const username = urlParams.get("username") || Math.floor(Math.random() * 1000).toString();
 
-You can bring more attention to sections of your documents by putting them inside an admonition block. There are many types to choose from.
+    const exampleCustomRoles = [
+      { target: "say", transform: async (content) => username + " says: '" + content + "'" },
+    ];
 
-~~~{note}
-You can find more information on https://mystmd.org/guide/admonitions.
-~~~
+    const exampleCustomDirectives = [
+      { target: "bold", transform: (_, data) => `<b style="white-space: pre-wrap;">${data.body}</b>` },
+      { target: "Title", transform: (_, data) => `<H1 class="myst-editor-title">${data.body}</H1>` },
+    ];
 
-~~~{important}
-Notice that the link in the previous admonition is rendered, even without the standard Markdown link syntax.
-~~~
-
-~~~~{tip}
-Admonitions can be nested.
-~~~{note}
-Like so.
-~~~
-~~~~
-
-## Dual Pane sync
-
-- In the default dual pane view mode in MyST Editor, you will notice a blue cursor appear both in the editor and in the preview.
-- The editor is aware of the correspondence between the lines and the respective HTML segments, and will highlight them accordingly.
-- The preview pane will also scroll if needed, so that you can always see where you are typing.
-
-~~~{tip}
-Try clicking something in the preview, the cursor in the editor should jump to the end of the corresponding line.
-~~~
-
-## Images
-
-Apart from the standard Markdown image syntax:
-
-![](https://picsum.photos/400/300)
-
-You can also use:
-- The image directive:
-  ~~~{image} https://picsum.photos/400/300
-  :alt: placeholder
-  :width: 200px
-  ~~~
-
-- The figure directive
-  ~~~{figure} https://picsum.photos/400/300
-  :alt: placeholder
-  :width: 200px
-
-  An example figure.
-  ~~~
-
-## Mermaid diagrams
-
-We have integrated the [Mermaid](https://mermaid.js.org/) diagramming tool with our editor, enabling you to add various diagrams and flowcharts to your documents.
-An overview of the Mermaid syntax is available [here](https://mermaid.js.org/intro/).
-
-### Graphs
-
-~~~mermaid
-graph TD;
-    A-->B;
-    A-->C;
-    B-->D;
-    C-->D;
-~~~
-
-### Sequence diagrams
-
-~~~mermaid
-sequenceDiagram
-    participant Alice
-    participant Bob
-    Alice->>John: Hello John, how are you?
-    loop HealthCheck
-        John->>John: Fight against hypochondria
-    end
-    Note right of John: Rational thoughts <br/>prevail!
-    John-->>Alice: Great!
-    John->>Bob: How about you?
-    Bob-->>John: Jolly good!
-~~~
-
-### Git graphs
-
-~~~mermaid
-gitGraph
-   commit
-   commit
-   branch develop
-   commit
-   commit
-   commit
-   checkout main
-   commit
-   commit
-~~~
-
-## Copy document, print to PDF, templates
-
-In the top left you will find some useful buttons that can be customized when integrating the editor with a website.
-Some of the buttons include:
-- \`Copy document as HTML\`
-- \`Print document as PDF\`
-- \`Templates\` - allows you to apply various document templates, depends on the configuration of the  MyST Editor
-
-## View modes
-
-In the top right corner you will find various view modes, including the source mode, preview mode, dual pane mode and the text diff mode, allowing you to see what changes were made.
-
-## Custom transforms
-
-The editor allows you to easily extend the standard Markdown syntax without having to write your own \`markdown-it\` plugins using the custom transforms feature.
-You can specify a regular expression and what the output should look like, e.g.:
-
-~~~js
-{
-  // Same repo issue links
-  target: /(^|(?<=s))#d+/g,
-  transform: (match) => {
-    const issueId = match.slice(1);
-    return \`<a href="https://github.com/antmicro/myst-editor/issues/\${issueId}">\${match}</a>\`;
-  },
-}
-~~~
-
-~~~{tip}
-The \`transform\` function can also be async. These async transforms will be cached, so that the editor doesn't make too many calls.
-~~~
-
-Examples of transforms included in the demo:
-
-Issue in this repo: #1
-PR in this repo: !2
-Issue in another repo: github/docs#30828
-PR in another repo: github/docs!100
-Person/org handle: @antmicro
-
-## Collaboration
-
-Collaborative features are not available in this demo, you will need to run the collaborative server to use them.
-These features include:
-- real-time editing with other people
-- seeing remote cursors
-- comments - add some text that does not show up in the preview
-  - resolved comments - a new view to see comments that were resolved`;
-      console.log("Welcome to the MyST editor demo. The right hand side should auto update.");
-
-      import MystEditor, { defaultButtons } from "./MystEditor.jsx";
-
-      const usercolors = ["#30bced", "#60c771", "#e6aa3a", "#cbb63e", "#ee6352", "#9ac2c9", "#8acb88", "#14b2c4"];
-
-      const urlParams = new URLSearchParams(window.location.search);
-      const room = urlParams.get("room") || "0";
-      const username = urlParams.get("username") || Math.floor(Math.random() * 1000).toString();
-      const color = usercolors[Math.floor(Math.random() * usercolors.length)];
-      let exampleCustomRoles = [
-        {
-          target: "say",
-          transform: async (content) => username + " says: '" + content + "'",
+    const exampleTransforms = [
+      {
+        target: /[0-9a-z\-]+\/[0-9a-z\-]+#\d{1,10}/g,
+        transform: (match) => {
+          const [repo, issueId] = match.split("#");
+          return `<a href="https://github.com/${repo}/issues/${issueId}">${match}</a>`;
         },
-      ];
+      },
+      {
+        target: /[0-9a-z\-]+\/[0-9a-z\-]+\!\d+/g,
+        transform: (match) => match,
+      },
+      {
+        target: /(^|(?<=\s))#\d+/g,
+        transform: (match) => `<a href="https://github.com/antmicro/myst-editor/issues/${match.slice(1)}">${match}</a>`,
+      },
+      {
+        target: /(^|(?<=\s))!\d+/g,
+        transform: (match) => `<a href="https://github.com/antmicro/myst-editor/pull/${match.slice(1)}">${match}</a>`,
+      },
+      {
+        target: /\|date\|/g,
+        transform: (match) => new Promise((r) => r(new Date().toLocaleString("en-GB", { timeZone: "UTC" }))),
+      },
+    ];
 
-      let exampleCustomDirectives = [
-        {
-          target: "bold",
-          transform: (_, data) => `<b style="white-space: pre-wrap;">${data.body}</b>`,
-        },
-      ];
+  async function initApp() {
+    await loadConfig();
+    // Initialize tab manager with your custom directives/roles
+    const tabManager = new TabManager({
+      customRoles: exampleCustomRoles,
+      customDirectives: exampleCustomDirectives,
+      transforms: exampleTransforms,
+    });
 
-      let exampleTransforms = [
-        {
-          // Other repo issue links
-          target: /[0-9a-z\-]+\/[0-9a-z\-]+#\d{1,10}/g,
-          transform: (match) => {
-            const [repo, issueId] = match.split("#");
-            return `<a href="https://github.com/${repo}/issues/${issueId}">${match}</a>`;
-          },
-        },
-        {
-          // Other repo PR links
-          target: /[0-9a-z\-]+\/[0-9a-z\-]+\!\d+/g,
-          transform: (match) => {
-            const [repo, prid] = match.split("!");
-            return `<a href="https://github.com/${repo}/pull/${prid}">${match}</a>`;
-          },
-        },
-        {
-          // Same repo issue links
-          target: /(^|(?<=\s))#\d+/g,
-          transform: (match) => {
-            const issueId = match.slice(1);
-            return `<a href="https://github.com/antmicro/myst-editor/issues/${issueId}">${match}</a>`;
-          },
-        },
-        {
-          // Same repo PR links
-          target: /(^|(?<=\s))!\d+/g,
-          transform: (match) => {
-            const prid = match.slice(1);
-            return `<a href="https://github.com/antmicro/myst-editor/pull/${prid}">${match}</a>`;
-          },
-        },
-        {
-          // User links
-          target: /@[0-9a-z\-]+/g,
-          transform: (match) => {
-            const user = match.slice(1);
-            return `
-          <a href='https://github.com/${user}'>
-            ${user}
-          </a>`;
-          },
-        },
-        {
-          target: /\|date\|/g,
-          transform: (match) => new Promise((r) => r(new Date().toLocaleString("en-GB", { timeZone: "UTC" }))),
-        },
-      ];
+    await tabManager.init();
+    }
 
-      const collabEnabled = !(import.meta.env.VITE_COLLAB == "OFF") && urlParams.get("collab") != "false";
-      const collabUrl = import.meta.env.VITE_WS_URL ?? urlParams.get("collab_server");
+  initApp();
 
-      MystEditor(
-        {
-          id: "demo",
-          templatelist: "linkedtemplatelist.json",
-          initialText: exampleText,
-          title: "[MyST Editor](https://github.com/antmicro/myst-editor/) demo",
-          transforms: exampleTransforms,
-          collaboration: {
-            enabled: collabEnabled,
-            commentsEnabled: collabEnabled,
-            resolvingCommentsEnabled: collabEnabled,
-            wsUrl: collabUrl ?? "#",
-            username,
-            room,
-            color,
-            mode: collabUrl ? "websocket" : "local",
-          },
-          customRoles: exampleCustomRoles,
-          customDirectives: exampleCustomDirectives,
-          includeButtons: defaultButtons.concat([
-            {
-              text: "Custom button",
-              action: () => alert("Custom button action"),
-            },
-          ]),
-          spellcheckOpts: { dict: "en_US", dictionaryPath: `${window.location.pathname}dictionaries` },
-          syncScroll: true,
-        },
-        document.getElementById("myst"),
-      );
-    </script>
-  </head>
-  <body>
-    <div id="myst"></div>
-  </body>
+  </script>
+</head>
+
+<body style="margin: 0; height: 100vh; overflow: hidden;">
+  <div id="myst-css-namespace" style="display: flex; flex-direction: column; height: 100vh; width: 100vw;">
+    <div id="tabs-bar"> 
+      <button id="new-tab-button">+</button>
+    </div>
+    <div id="tabs-content" style="flex: 1; position: relative; overflow: hidden;"></div>
+  </div>
+</body>
+
 </html>

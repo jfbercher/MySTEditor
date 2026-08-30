@@ -1,5 +1,5 @@
 import { render } from "preact";
-import { useEffect, useRef, useMemo, useContext } from "preact/hooks";
+import { useEffect, useRef, useMemo, useContext, useState } from "preact/hooks";
 import { StyleSheetManager, styled } from "styled-components";
 import CodeMirror from "./components/CodeMirror";
 import Preview, { PreviewFocusHighlight } from "./components/Preview";
@@ -15,6 +15,9 @@ import { TableOfContents } from "./components/TableOfContents";
 import ErrorModal from "./components/ErrorModal";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { createLogger, Logger } from "./logger";
+import { setupPreviewPopups, invalidatePreviewMapCache } from "./utils/previewPopup";
+
+
 
 const EditorParent = styled.div`
   font-family: "Lato";
@@ -45,6 +48,49 @@ const EditorParent = styled.div`
   }}
 `;
 
+
+const TocToggleWrapper = styled.div`
+  position: relative;
+  width: 0;
+  z-index: 2;
+`;
+
+const TocToggle = styled.button`
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+`;
+
+const TocPanel = styled.div`
+  flex: 0 0 ${(props) => (props.open ? `${props.width}px` : "0px")};
+  width: ${(props) => (props.open ? `${props.width}px` : "0px")};
+  overflow: hidden;
+  transition: ${(props) => (props.resizing ? "none" : "flex-basis 0.2s ease")};
+  height: 100%;
+  position: relative;
+`;
+
+const ResizeHandle = styled.div`
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 3;
+  &:hover {
+    background-color: var(--border);
+  }
+`;
+
 const MystWrapper = styled.div`
   padding: 20px;
   display: flex;
@@ -69,9 +115,12 @@ const StatusBanner = styled.div`
   font-weight: 600;
 `;
 
+
+
 /** CSS flexbox takes the content size of elements to determine the layout and ignores padding.
  * This wrapper is here to make sure the padding is added one element deeper and elements are equal width.
  * Ideally we would use CSS Grid but that has some performance issues with CodeMirror on Chromium. */
+
 const FlexWrapper = styled.div`
   flex: 1;
   min-width: 0;
@@ -84,6 +133,8 @@ const FlexWrapper = styled.div`
 
 const hideBodyScrollIf = (val) => (document.documentElement.style.overflow = val ? "hidden" : "visible");
 
+
+
 const MystEditor = () => {
   const { editorView, cache, options, collab, text, suggestMode } = useContext(MystState);
   const fullscreen = useSignal(false);
@@ -93,6 +144,17 @@ const MystEditor = () => {
   useEffect(() => {
     text.preview.value = preview.current;
   }, [preview.current]);
+  
+  useEffect(() => {
+    if (options.parent) setupPreviewPopups(options.parent, text);
+  }, []);
+
+  useEffect(() => {
+  return () => {
+    document.removeEventListener("mousemove", onResize);
+    document.removeEventListener("mouseup", stopResize);
+  };
+}, []);
 
   const alert = useSignal(null);
   const alertFor = (alertText, secs) => {
@@ -126,6 +188,35 @@ const MystEditor = () => {
     [options.includeButtons.value, buttonActions],
   );
 
+
+const [tocOpen, setTocOpen] = useState(false);
+const [tocWidth, setTocWidth] = useState(260);
+const [isResizing, setIsResizing] = useState(false);
+const wrapperRef = useRef(null);
+const resizing = useRef(false);
+
+function startResize(ev) {
+  ev.preventDefault();
+  resizing.current = true;
+  setIsResizing(true);
+  document.addEventListener("mousemove", onResize);
+  document.addEventListener("mouseup", stopResize);
+}
+
+function onResize(ev) {
+  if (!resizing.current || !wrapperRef.current) return;
+  const left = wrapperRef.current.getBoundingClientRect().left;
+  const newWidth = Math.min(Math.max(ev.clientX - left, 150), 500);
+  setTocWidth(newWidth);
+}
+
+function stopResize() {
+  resizing.current = false;
+  setIsResizing(false);
+  document.removeEventListener("mousemove", onResize);
+  document.removeEventListener("mouseup", stopResize);
+}
+
   return (
     <StyleSheetManager target={options.parent}>
       <MystContainer id="myst-css-namespace">
@@ -137,7 +228,16 @@ const MystEditor = () => {
               <StatusBanner>Connecting to the collaboration server ...</StatusBanner>
             )}
             {options.collaboration.value.enabled && collab.value.lockMsg.value && <StatusBanner>{collab.value.lockMsg}</StatusBanner>}
-            <MystWrapper className="myst-editor-wrapper" fullscreen={fullscreen.value}>
+            <MystWrapper ref={wrapperRef} className="myst-editor-wrapper" fullscreen={fullscreen.value}>
+              <TocToggleWrapper>
+                <TocToggle open={tocOpen} onClick={() => setTocOpen((o) => !o)} title={tocOpen ? "Hide table of contents" : "Show table of contents"}>
+                  {tocOpen ? "‹" : "›"}
+                </TocToggle>
+              </TocToggleWrapper>
+              <TocPanel open={tocOpen} width={tocWidth} resizing={isResizing}>
+                {tocOpen && <TableOfContents compact />}
+                {tocOpen && <ResizeHandle onMouseDown={startResize} />}
+              </TocPanel>
               <FlexWrapper id="editor-wrapper" className="flex-wrapper">
                 <CodeMirror />
               </FlexWrapper>
@@ -149,6 +249,21 @@ const MystEditor = () => {
                   onClick={(ev) => {
                     try {
                       if (options.onPreviewClick.value?.(ev)) return;
+
+                      /*const dropdownHeader = ev.target.closest(".admonition.dropdown > header");
+                      if (dropdownHeader) {
+                        dropdownHeader.parentElement.classList.toggle("open");
+                        return;
+                      }*/
+
+                      const anchorLink = ev.target.closest('a[href^="#"]');
+                      if (anchorLink) {
+                        ev.preventDefault();
+                        const targetId = decodeURIComponent(anchorLink.getAttribute("href").slice(1));
+                        const targetEl = options.parent?.querySelector?.(`#${CSS.escape(targetId)}`);
+                        targetEl?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        return;
+                      }
 
                       syncCheckboxes(ev, text.lineMap, editorView.value);
 
@@ -219,6 +334,8 @@ export default ({ additionalStyles, id, ...params }, /** @type {HTMLElement} */ 
   const logger = createLogger(state);
   window.myst_editor[editorId].logger = logger;
 
+  state.options.onReady.value?.({ state, git: null });
+
   // cleanup function
   function remove() {
     state.cleanups.forEach((c) => c());
@@ -252,4 +369,4 @@ export default ({ additionalStyles, id, ...params }, /** @type {HTMLElement} */ 
 export { defaultButtons, predefinedButtons, batch, computed, signal, effect, MystEditor as MystEditorPreact };
 export { default as MystEditorGit } from "./myst-git/MystEditorGit";
 export { CollaborationClient } from "./collaboration";
-export { darkTheme } from "./styles/MystStyles";
+export { darkTheme, lightTheme } from "./styles/MystStyles";

@@ -352,6 +352,7 @@ const CodeMirror = () => {
           b.useSyncPreviewWithCursor({ text, preview: text.preview.value, lastTyped }),
         )
         .if(options.yamlSchema.value, (b) => b.useYamlSchema(options.yamlSchema.value, editorView, linter))
+        //.useCodeBlockLanguages(editorView, linter)
         .if(options.mode.value === "Inline", (b) => b.useInlinePreview(text, options))
         .useTrackHeadings(headings)
         .useExceptionSink(error)

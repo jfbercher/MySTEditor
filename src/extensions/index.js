@@ -19,6 +19,7 @@ import {
   HighlightStyle,
   forceParsing,
 } from "@codemirror/language";
+import { frontmatterFoldService } from "./frontmatterFold";
 import { syncPreviewWithCursor } from "./syncDualPane";
 import { cursorIndicator } from "./cursorIndicator";
 import { yaml, yamlFrontmatter } from "@codemirror/lang-yaml";
@@ -36,6 +37,9 @@ import { highlightFocusedActiveLine } from "./activeLineHighlight";
 import { classHighlighter, tags } from "@lezer/highlight";
 import { loggerFacet } from "../logger";
 import { criticHistory, criticMarkup, suggestMode } from "./criticMarkup";
+import { codeBlockLanguages } from "./codeBlockLanguages";
+import { python } from "@codemirror/lang-python";
+
 
 const getRelativeCursorLocation = (view) => {
   const { from } = view.state.selection.main;
@@ -88,6 +92,7 @@ export class ExtensionBuilder {
     this.important = [EditorState.lineSeparator.of("\n")];
     this.base = [...base];
     this.extensions = ExtensionBuilder.defaultPlugins();
+    this.extensions.push(frontmatterFoldService);
   }
 
   static basicSetup() {
@@ -105,9 +110,12 @@ export class ExtensionBuilder {
     ]);
   }
 
-  static codeLanguage(name) {
+static codeLanguage(name) {
     if (name == "yaml") {
       return yaml().language;
+    }
+    if (name == "python") {
+      return python().language;
     }
   }
 
@@ -304,6 +312,11 @@ export class ExtensionBuilder {
     this.extensions.push(yamlSchema(schema, editorView, linter));
     return this;
   }
+
+  useCodeBlockLanguages(editorView, linter) {
+  this.extensions.push(codeBlockLanguages(editorView, linter));
+  return this;
+}
 
   useInlinePreview(text, options) {
     this.extensions.push(inlinePreview(text, options));

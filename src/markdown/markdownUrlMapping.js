@@ -9,7 +9,7 @@ const mapToken = (token, mapFunc) => {
   }
 };
 
-export function markdownItMapUrls(/** @type {markdownIt} */ md, mapUrl) {
+function markdownItMapUrls(/** @type {markdownIt} */ md, mapUrl) {
   md.core.ruler.after("inline", "map_urls", (state) => {
     for (const token of state.tokens) {
       mapToken(token, mapUrl);
@@ -17,3 +17,16 @@ export function markdownItMapUrls(/** @type {markdownIt} */ md, mapUrl) {
     }
   });
 }
+
+const overloadMapUrl = (cache) => (mapUrl) => (tag, url) => {
+  
+  if (cache.has(url)) return cache.get(url);
+
+  const result = mapUrl(tag, url);
+  if (typeof result?.then !== "function") return result;
+
+  cache.resolve(url, result, `mapUrl:${tag}`);
+  return url;
+};
+
+export { markdownItMapUrls, overloadMapUrl };

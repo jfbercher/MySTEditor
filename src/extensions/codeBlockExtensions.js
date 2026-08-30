@@ -57,10 +57,13 @@ const codeBlocksSubeditors = (extensions, editorView, tooltipSources = {}, compl
       tree.iterate({
         enter(ref) {
           if (ref.name !== "FencedCode") return true;
+
           if (value.editors.some((e) => e.from == ref.from && e.to == ref.to)) return false;
           const startLine = tr.state.doc.lineAt(ref.from);
           const lang = startLine.text.trim().replace(/[`~:]+/, "");
           if (!(lang in value.extensions)) return false;
+           console.log("lang extrait:", JSON.stringify(lang), "extensions disponibles:", Object.keys(value.extensions), "match:", lang in value.extensions);
+
 
           const endLine = tr.state.doc.lineAt(ref.to);
           const closed = ref.node.lastChild?.name === "CodeMark" && ref.node.lastChild.from > ref.from;

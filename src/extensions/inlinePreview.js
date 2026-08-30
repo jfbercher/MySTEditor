@@ -4,6 +4,7 @@ import { tags } from "@lezer/highlight";
 import { EditorView } from "codemirror";
 import { Decoration, WidgetType } from "@codemirror/view";
 import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { handlePreviewInteraction } from "../utils/previewInteractions";
 
 const focusEffect = StateEffect.define();
 
@@ -70,7 +71,7 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
         continue;
       }
       if (child.nodeType === Node.TEXT_NODE && !child.textContent?.trim()) continue;
-      const line = child.nodeType === Node.ELEMENT_NODE ? minLineIn(lineOfId, /** @type {Element} */ (child)) : Infinity;
+      const line = child.nodeType === Node.ELEMENT_NODE ? minLineIn(lineOfId, /** @type {Element} */(child)) : Infinity;
       if (line !== Infinity) part.line = Math.min(part.line, line);
       part.nodes.push(child);
     }
@@ -168,18 +169,27 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     return byLine;
   }
 
-  function computeBlocks() {
-    // Shared Preview chunk cache — renderText always refreshes chunks (DOM only when Preview/Both).
+
+function computeBlocks() {
     if (!text.chunks.length) text.renderText(true, true);
-    // Fingerprint the chunks' own text, not text.text.value: the blocks below are built from these
-    // chunks, and a chunk can lag the signal, in which case the two describe different documents.
     const source = text.chunks.map((c) => c.text).join("");
+
+    const isSynthetic = (c) => typeof c.hash === "string" && (c.hash.startsWith("footnotes-") || c.hash.startsWith("bibliography-"));
+    const realChunks = text.chunks.filter((c) => !isSynthetic(c));
+    const syntheticChunks = text.chunks.filter(isSynthetic);
+
+    const byLine = projectHtml(realChunks.map((c) => c.html).join(""), text.lineMap);
+
+    syntheticChunks.forEach((chunk, i) => {
+      byLine.set(Number.MAX_SAFE_INTEGER - syntheticChunks.length + 1 + i, { html: chunk.html, listDepth: null });
+    });
+
     return {
-      byLine: projectHtml(text.chunks.map((c) => c.html).join(""), text.lineMap),
+      byLine,
       docLength: source.length,
       docLines: source.split("\n").length,
     };
-  }
+}
 
   /** Whether the blocks still describe `state`'s document. */
   const projectionMatches = (state) => {
@@ -187,17 +197,32 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     return docLength === state.doc.length && docLines === state.doc.lines;
   };
 
-  function blockRanges(state) {
+
+    function blockRanges(state) {
     const { byLine } = state.field(blocksField);
-    // Stale blocks hold line numbers the document may no longer have, and doc.line() throws on those.
     if (!projectionMatches(state)) return [];
     const starts = [...byLine.keys()].sort((a, b) => a - b);
+    const SYNTHETIC_THRESHOLD = Number.MAX_SAFE_INTEGER - 1000; // toute clé au-delà = bloc synthétique
     const ranges = [];
     for (let i = 0; i < starts.length; i++) {
       const startLine = starts[i];
-      let endLine = i + 1 < starts.length ? starts[i + 1] - 1 : state.doc.lines;
-      while (endLine > startLine && !state.doc.line(endLine).text.trim()) endLine--;
       const block = byLine.get(startLine);
+
+      if (startLine >= SYNTHETIC_THRESHOLD) {
+        ranges.push({
+          startLine: state.doc.lines,
+          endLine: state.doc.lines,
+          from: state.doc.length,
+          to: state.doc.length,
+          html: block.html,
+          listDepth: block.listDepth,
+          synthetic: true,
+        });
+        continue;
+      }
+
+      let endLine = i + 1 < starts.length && starts[i + 1] < SYNTHETIC_THRESHOLD ? starts[i + 1] - 1 : state.doc.lines;
+      while (endLine > startLine && !state.doc.line(endLine).text.trim()) endLine--;
       ranges.push({
         startLine,
         endLine,
@@ -238,10 +263,29 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
       return this.html === widget.html && this.startLine === widget.startLine && this.endLine === widget.endLine;
     }
 
+
     toDOM(view) {
       const el = document.createElement("span");
       el.className = "cm-inline-rendered-md";
       el.innerHTML = this.html;
+
+      el.addEventListener("click", (ev) => {
+        if (handlePreviewInteraction(ev, view.root, view, text.refMap)) {
+          ev.stopPropagation();
+          return;
+        }
+        // If the click was not intercepted by anything specific (link, dropdown, checkbox), 
+        // force entry into edit mode on this block, even if the point is precisely clicked 
+        // has no natively resolvable character position (common case with KaTeX).
+        const line = view.state.doc.line(this.startLine);
+        view.dispatch({
+          selection: EditorSelection.cursor(line.from),
+          effects: focusEffect.of(true),
+          userEvent: "select.pointer",
+        });
+        view.focus();
+      });
+
       el.addEventListener("mousedown", (ev) => {
         if (!(ev.target instanceof Element) || ev.target.tagName !== "INPUT") return;
         ev.preventDefault();
@@ -275,6 +319,17 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
     const decorations = [];
 
     for (const block of blockRanges(state)) {
+      if (block.synthetic) {
+        decorations.push(
+          Decoration.widget({
+            widget: new ProjectedWidget(block.html, block.startLine, block.endLine),
+            block: true,
+            side: 1,
+          }).range(block.from),
+        );
+        continue;
+      }
+
       if (focused && selectionTouchesBlock(state.selection, block, state.doc)) {
         for (let lineNo = block.startLine; lineNo <= block.endLine; lineNo++) {
           const line = state.doc.line(lineNo);
@@ -296,8 +351,6 @@ export const inlinePreview = (/** @type {TextManager} */ text, options) => {
       );
     }
 
-    // A blank line belongs to no block, so the loop above skips it. Keep the caret's line as source
-    // regardless, or its whitespace is laid out in the preview font and the caret looks misplaced.
     if (focused) decorations.push(Decoration.line({ class: "cm-inline-source-line" }).range(state.doc.lineAt(state.selection.main.head).from));
 
     return Decoration.set(decorations, true);

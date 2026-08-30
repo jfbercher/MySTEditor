@@ -1,0 +1,34 @@
+ .myst-editor-title {
+   text-align: center;
+   font-weight: 700;
+   font-size: 28px;
+   color: var(--editor-title);
+   margin: 1.5rem 0;
+ }
+
+ .custom-header-num {
+   font-weight: bold;
+   /* margin-right: 0.4em; */
+ }
+
+ .custom-header-num::after {
+   content: " - ";
+ }
+
+ /* Prevent the active CodeMirror indicator from being pushed to the right */
+ .cm-activeLine {
+   left: 0 !important;
+   box-sizing: border-box !important;
+ }
+
+ .myst-preview-popup {
+   position: absolute;
+   z-index: 1000;
+   max-width: 400px;
+   background: var(--panel-bg, white);
+   border: 1px solid var(--border, #ccc);
+   border-radius: 6px;
+   padding: 10px 12px;
+   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+   font-size: 0.9em;
+ }

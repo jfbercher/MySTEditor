@@ -1,0 +1,39 @@
+.myst-fm-block {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.myst-fm-header {
+  display: flex;
+  gap: 8px;
+  font-size: 0.85em;
+  opacity: 0.75;
+  margin-bottom: 8px;
+}
+
+.myst-fm-title {
+  margin: 0 0 4px 0;
+}
+
+.myst-fm-subtitle {
+  margin: 0 0 8px 0;
+  opacity: 0.8;
+}
+
+.myst-fm-authors {
+  font-size: 0.9em;
+  margin-bottom: 4px;
+}
+
+.myst-fm-date-doi {
+  display: flex;
+  gap: 12px;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.myst-fm-doi,
+.myst-fm-github {
+  color: inherit;
+} 
