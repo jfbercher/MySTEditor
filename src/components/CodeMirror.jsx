@@ -200,8 +200,8 @@ const CodeEditor = styled.div`
     }
   }
 
-  .cm-inline-rendered-md {
-    /* Same Preview HTML, projected into a cm-line (non-block replace) so carets still work. */
+.cm-inline-rendered-md {
+  &:not(&.inline-custom-styles) {
     all: initial;
     display: inline-block;
     width: 100%;
@@ -210,6 +210,8 @@ const CodeEditor = styled.div`
     color: inherit;
     font-family: "Lato";
     font-size: 16px;
+    word-break: inherit;
+  }
 
     ${MdStyles}
 
@@ -228,6 +230,8 @@ const CodeEditor = styled.div`
     font-family: monospace !important;
     font-size: 14px !important;
     line-height: 1.3em !important;
+    /* An inline-block would be sized against the whole line instead of the space left in the row, so it would move down as a whole and break the text early. */
+    display: inline !important;
   }
 
   .cm-editor .cm-lintRange-error {
