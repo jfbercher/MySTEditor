@@ -1,5 +1,5 @@
 import { lineNumbers, highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor, keymap } from "@codemirror/view";
-import { Compartment, EditorSelection, EditorState, Facet, Prec } from "@codemirror/state";
+import { Annotation, Compartment, EditorSelection, EditorState, Facet, Prec } from "@codemirror/state";
 import { EditorView } from "codemirror";
 import { yCollab } from "y-codemirror.next";
 import { markdown } from "@codemirror/lang-markdown";
@@ -60,6 +60,9 @@ const restoreCursorLocation = (view, location) => {
 };
 
 export const folded = (update) => update.transactions.some((t) => t.effects.some((e) => e.is(foldEffect) || e.is(unfoldEffect)));
+
+/** Marks folds which the editor performs on its own, so that they are not treated as user actions. */
+export const programmaticFold = Annotation.define();
 export const collabClientFacet = Facet.define();
 
 const syntaxHighlight = HighlightStyle.define([
@@ -314,6 +317,8 @@ static codeLanguage(name) {
       }),
       EditorView.updateListener.of((update) => {
         if (!folded(update)) return;
+        // Folds done on startup would otherwise make the editor steal focus as soon as it loads.
+        if (update.transactions.some((tr) => tr.annotation(programmaticFold))) return;
         update.view.focus();
       }),
     );
@@ -391,7 +396,7 @@ export function skipAndFoldAll(/** @type {EditorView} */ view, skip = 0) {
     pos = (range ? view.lineBlockAt(range.to) : line).to + 1;
     if (range) nProcessedFoldables++;
   }
-  if (effects.length) view.dispatch({ effects });
+  if (effects.length) view.dispatch({ effects, annotations: programmaticFold.of(true) });
 }
 
 /** Folds any ATX heading line ending in `(^)` (e.g. `## Section (^)`), so it starts collapsed.
@@ -412,5 +417,5 @@ export function foldMarkedHeadings(/** @type {EditorView} */ view) {
     const range = foldable(state, line.from, line.to);
     if (range) effects.push(foldEffect.of(range));
   }
-  if (effects.length) view.dispatch({ effects });
+  if (effects.length) view.dispatch({ effects, annotations: programmaticFold.of(true) });
 }
