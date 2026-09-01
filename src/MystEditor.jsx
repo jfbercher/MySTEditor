@@ -11,6 +11,7 @@ import { createMystState, MystState, predefinedButtons, defaultButtons } from ".
 import { batch, computed, signal, effect, useSignal, useSignalEffect } from "@preact/signals";
 import { MystContainer } from "./styles/MystStyles";
 import { syncCheckboxes } from "./markdown/markdownCheckboxes";
+import { toggleFoldOnClick } from "./text";
 import { TableOfContents } from "./components/TableOfContents";
 import ErrorModal from "./components/ErrorModal";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -249,6 +250,7 @@ function stopResize() {
                   onClick={(ev) => {
                     try {
                       if (options.onPreviewClick.value?.(ev)) return;
+                      if (toggleFoldOnClick(ev, preview.current)) return;
 
                       /*const dropdownHeader = ev.target.closest(".admonition.dropdown > header");
                       if (dropdownHeader) {
