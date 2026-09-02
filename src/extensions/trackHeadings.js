@@ -75,25 +75,8 @@ function getHeadingsFlat(/** @type {EditorState} */ state) {
   return headingsFlat;
 }
 
-/* function nestHeadings(headingsFlat) {
-  const headingsNested = [];
-  const levelMap = {};
-  headingsFlat.forEach((h) => {
-    const newItem = { ...h, children: [] };
-    const parent = levelMap[h.level - 1];
-    if (h.level === 1) {
-      headingsNested.push(newItem);
-    } else if (parent) {
-      parent.children.push(newItem);
-    } else {
-      headingsNested.push(newItem);
-    }
-    levelMap[h.level] = newItem;
-  });
-  return headingsNested;
-} */
 
- function nestHeadings(headingsFlat) {
+ export function nestHeadings(headingsFlat) {
   const headingsNested = [];
   const levelMap = {};
   headingsFlat.forEach((h) => {
