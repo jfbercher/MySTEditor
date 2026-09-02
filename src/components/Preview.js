@@ -482,7 +482,7 @@ aside[class="admonition"] {
   }
 
   .myst-folded {
-    display: none;
+    display: none !important;
   }
 
   /* Folds are a reading aid, a printout should still contain the whole document. */
