@@ -219,8 +219,10 @@ const CodeEditor = styled.div`
       margin-bottom: 0;
     }
 
-    & > * {
-      margin-block: 0 !important;
+    /* Custom directives are rendered wrapped in a div, so their content is one level deeper. */
+    & > *,
+    & > div > * {
+      margin: 0 !important;
     }
   }
 
