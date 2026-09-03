@@ -1,5 +1,6 @@
+# Mystral Editor
 
-This is a fork of [antmicro Myst-Editor](https://github.com/antmicro/myst-editor/). A number of adaptations and additions have been made to extend its capabilities for local document authoring and scientific editing. Original doc below. 
+This project is based on the excellent [antmicro Myst-Editor](https://github.com/antmicro/myst-editor/). Several modifications and additions have been made to expand its capabilities for creating documents and conducting scientific editing locally, including a local version (built with Tauri). The original document is provided below.
 
 # Additions
 
