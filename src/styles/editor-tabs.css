@@ -46,6 +46,11 @@
   color: var(--error-bg, #e74a3c);
 }
 
+.myst-tab-button.dirty .myst-tab-label::after {
+  content: " *";
+  color: var(--accent-dark, #0083e1);
+}
+
 #new-tab-button {
   cursor: pointer;
   border: 1px solid var(--border, transparent);

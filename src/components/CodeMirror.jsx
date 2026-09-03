@@ -384,7 +384,7 @@ const CodeMirror = () => {
      * so instead we call it outside the current hook using setTimeout. */
     setTimeout(() => {
       collab.value?.ycomments?.updateMainCodeMirror();
-    }, 0);
+    }, 100);
 
     return () => {
       view.destroy();
@@ -393,8 +393,9 @@ const CodeMirror = () => {
 
   return (
     <CodeEditor className="myst-main-editor" ref={editorMountpoint} $mode={options.mode.value} id={`${options.id.value}-editor`}>
-      {options.collaboration.value.commentsEnabled && collab.value.ready.value && collab.value.ycomments?.mainCodeMirror && <YCommentsParent />}
-    </CodeEditor>
+      // {options.collaboration.value.commentsEnabled && collab.value.ready.value && collab.value.ycomments?.mainCodeMirror && <YCommentsParent />}
+    {options.collaboration.value.commentsEnabled && collab.value.ready.value && collab.value.ycomments?.mainCodeMirrorSignal.value && <YCommentsParent />}
+</CodeEditor>
   );
 };
 

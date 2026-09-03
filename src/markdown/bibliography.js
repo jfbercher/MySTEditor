@@ -1,4 +1,7 @@
 import { BibtexParser } from "bibtex-js-parser";
+import { readTextFile } from '@tauri-apps/plugin-fs';
+
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 //
 const bibStateByEditor = new Map(); // editorId -> { entries: [], loadedPath: null }
@@ -21,7 +24,13 @@ export function disposeEditorBibliography(editorId) {
 export async function ensureBibliographyLoaded(editorId, path, getDirectoryHandle, onLoaded) {
   const state = getBibState(editorId);
 
-  if (!path) {
+  // 1. Extraire le premier élément si path est un tableau (ex: ["references.bib"])
+  if (Array.isArray(path)) {
+    path = path[0];
+  }
+
+  // 2. Vérifier que path est présent et de type string
+  if (!path || typeof path !== 'string') {
     if (state.entries.length > 0) {
       state.entries = [];
       state.loadedPath = null;
@@ -29,6 +38,7 @@ export async function ensureBibliographyLoaded(editorId, path, getDirectoryHandl
     }
     return;
   }
+
   if (path === state.loadedPath) return;
   state.loadedPath = path;
 
@@ -39,9 +49,19 @@ export async function ensureBibliographyLoaded(editorId, path, getDirectoryHandl
       state.loadedPath = null;
       return;
     }
-    const fileHandle = await dirHandle.getFileHandle(path);
-    const file = await fileHandle.getFile();
-    let text = await file.text();
+
+    let text;
+    if (isTauri) {
+      // Nettoyage et construction du chemin absolu pour Tauri
+      const cleanRelativePath = path.replace(/^\.?\//, '').replaceAll('\\', '/');
+      const absolutePath = `${dirHandle}/${cleanRelativePath}`;
+      text = await readTextFile(absolutePath);
+    } else {
+      const fileHandle = await dirHandle.getFileHandle(path);
+      const file = await fileHandle.getFile();
+      text = await file.text();
+    }
+
     text = normalizeBibtex(text);
     text = text.replace(/\\(?!\\)/g, "\\\\");
     state.entries = BibtexParser.parseToJSON(text);

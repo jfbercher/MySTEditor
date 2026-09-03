@@ -25,7 +25,7 @@ const EditorParent = styled.div`
   flex-flow: row wrap;
   width: 100%;
   height: 100%;
-  ${(props) => props.fullscreen && "position: fixed; left: 0; top: 0; z-index: 10;"}
+  ${(props) => props.$fullscreen && "position: fixed; left: 0; top: 0; z-index: 10;"}
   ${(props) => {
     switch (props.mode) {
       case "Preview":
@@ -99,7 +99,7 @@ const MystWrapper = styled.div`
   width: 100%;
   position: relative;
   background-color: var(--panel-bg);
-  ${(props) => props.fullscreen && "box-sizing:border-box; height: calc(100vh - 60px);"}
+  ${(props) => props.$fullscreen && "box-sizing:border-box; height: calc(100vh - 60px);"}
 `;
 
 const StatusBanner = styled.div`
@@ -222,13 +222,13 @@ function stopResize() {
       <MystContainer id="myst-css-namespace">
         <ErrorModal />
         <ErrorBoundary>
-          <EditorParent mode={options.mode.value} fullscreen={fullscreen.value}>
+          <EditorParent mode={options.mode.value} $fullscreen={fullscreen.value}>
             {options.topbar.value && <EditorTopbar alert={alert} buttons={buttons} />}
             {options.collaboration.value.enabled && !collab.value.ready.value && (
               <StatusBanner>Connecting to the collaboration server ...</StatusBanner>
             )}
             {options.collaboration.value.enabled && collab.value.lockMsg.value && <StatusBanner>{collab.value.lockMsg}</StatusBanner>}
-            <MystWrapper ref={wrapperRef} className="myst-editor-wrapper" fullscreen={fullscreen.value}>
+            <MystWrapper ref={wrapperRef} className="myst-editor-wrapper" $fullscreen={fullscreen.value}>
               <TocToggleWrapper>
                 <TocToggle open={tocOpen} onClick={() => setTocOpen((o) => !o)} title={tocOpen ? "Hide table of contents" : "Show table of contents"}>
                   {tocOpen ? "‹" : "›"}

@@ -3,6 +3,17 @@
 
 <head>
   <title>MyST editor</title>
+  <meta 
+  http-equiv="Content-Security-Policy" 
+  content="
+    default-src 'self' tauri: asset: https://asset.localhost;
+    script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net;
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+    font-src 'self' https://fonts.gstatic.com data:;
+    img-src 'self' asset: https://asset.localhost asset://* blob: data: https: http:;
+    connect-src 'self' https: tauri: asset: https://asset.localhost ipc: http://ipc.localhost;
+  "
+/>
   <link rel="stylesheet" href="./styles/MystEditor.css" />
   <link rel="stylesheet" href="./styles/editor-tabs.css" />
   <link rel="icon" href="data:," />
@@ -25,8 +36,6 @@
   </style>
 
   <script type="module">
-    import { loadConfig } from "./config.js";
-    import { TabManager } from "./tab_manager.js";
 
     // Dynamic configuration available right here in index.html
     const urlParams = new URLSearchParams(window.location.search);
@@ -67,19 +76,14 @@
       },
     ];
 
-  async function initApp() {
-    await loadConfig();
-    // Initialize tab manager with your custom directives/roles
-    const tabManager = new TabManager({
+  import { initApp } from "./app.js";
+
+    // Bootstrapping the application
+    initApp({
       customRoles: exampleCustomRoles,
       customDirectives: exampleCustomDirectives,
       transforms: exampleTransforms,
     });
-
-    await tabManager.init();
-    }
-
-  initApp();
 
   </script>
 </head>

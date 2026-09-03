@@ -239,6 +239,7 @@ export class YComments {
         commentId,
       })),
     );
+    this.mainCodeMirrorSignal = signal(null);
 
     /** commentId -> (EditorView) => void - here a listener can be added to wait for an editor for a comment to become available */
     this.commentEditorsListeners = new Map();
@@ -264,9 +265,13 @@ export class YComments {
     return this.commentResolver;
   }
 
-  registerCodeMirror(cm) {
+  /*registerCodeMirror(cm) {
     this.mainCodeMirror = cm;
-  }
+  }*/
+  registerCodeMirror(cm) {
+  this.mainCodeMirror = cm;
+  this.mainCodeMirrorSignal.value = cm;
+}
 
   /**
    * The editor's left gutter width varies depending on screen size, line count and other factors.

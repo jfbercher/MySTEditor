@@ -3,6 +3,8 @@ Saves
 .DS_Store
 node_modules
 .env
+*.css~
+*.json~
 test-results
 playwright-report
 docs/build/

@@ -11,7 +11,7 @@ import { useSignalEffect } from "@preact/signals";
 
 const YCommentWrapper = styled.div`
   position: absolute;
-  top: ${(props) => props.top + 20}px;
+  top: ${(props) => props.top + 40}px;
   left: ${(props) => props.left + 19}px;
 
   z-index: 3;
@@ -95,6 +95,7 @@ const YComment = ({ commentId }) => {
       effects: commentUserSettingsCompartment.reconfigure(userExtensions),
     });
   }, [userSettings.value, cmView.current]);
+
 
   useSignalEffect(() => {
     const ytext = collab.value.ycomments.getTextForComment(commentId);

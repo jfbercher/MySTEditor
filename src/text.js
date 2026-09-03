@@ -437,6 +437,6 @@ export function sanitize(unsafeHTML) {
   return purify.sanitize(unsafeHTML, {
     ADD_TAGS: ["foreignobject", "iframe"],
     ADD_ATTR: ["dominant-baseline", "target"],
-    ALLOWED_URI_REGEXP: /^(?:(?:https?|ftp|mailto|tel|blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|ftp|mailto|tel|blob|asset):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
   });
 }

@@ -1,5 +1,6 @@
 import * as localUtils from "./utils/local_utils.js";
 import MystEditor, { defaultButtons } from "./MystEditor.jsx";
+import { YCommentsParent } from "./components/Comment";
 import { effect } from "@preact/signals";
 import { h } from "preact";
 
@@ -92,6 +93,15 @@ export function makeButtons(tab, getAllEditorIds, updateTabLabel, openFileHandle
             await tab.saveAs();
           },
         },
+        // ----
+        {
+          id: "make-backup",
+          text: "⛑️ Make backup",
+          action: async () => {
+            await tab.handleBackup(); // Call the function to save the backup();
+          },
+        },
+        // ----
         {
           id: "save-reload",
           text: "🔄 Save and reload",
@@ -176,7 +186,7 @@ export function mountEditor(options) {
     editorOptions, 
     getAllEditorIds, 
     updateTabLabel, 
-    openFileHandleInTab // <-- 1. Récupérer le paramètre ici
+    openFileHandleInTab 
   } = options;
 // export function mountEditor({ editorId, tab, container, initialContent, editorOptions, getAllEditorIds, updateTabLabel }) {
   MystEditor(
@@ -199,10 +209,11 @@ export function mountEditor(options) {
       },
       getBibliographyDirectory: () => localUtils.getWorkingDirectory(),
       onReady: ({ state }) => {
+        let commentsLoaded = false;
         effect(async () => {
           const view = state.editorView.value;
           if (view && !tab.editorReady) {
-            tab.setEditorReady(true);
+            tab.setEditorReady(false);
             await tab.applyThemeAtStartup();
 
             let rawContent = null;
@@ -224,11 +235,36 @@ export function mountEditor(options) {
 
             tab.setEditorText(rawContent);
             updateTabLabel(editorId);
+            tab.markSaved(rawContent);
+            if (view && !commentsLoaded) {
+              commentsLoaded = true;
+              await tab.loadCommentsForCurrentFile();
+            }
+            tab.setEditorReady(true);
           }
         });
+          effect(() => {
+            const currentText = state.text.text.value;
+            tab.checkDirty(currentText);
+          });
+          effect(() => {
+            const ycomments = state.collab.value?.ycomments;
+            if (ycomments) tab.registerYComments(ycomments);
+          });
       },
       additionalStyles: [codeMirrorStyle, katexStyle, previewStyle, frontmatterStyle, footnotesStyle, bibliographyStyle],
-      mapUrl: (tag, url) => (tag === "img" ? localUtils.resolveImage(url) : url),
+      mapUrl: (tag, url) => {
+            if (tag !== "img") return url;
+            
+            // Sous Tauri, on résout le chemin immédiatement de façon synchrone
+            if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+              const resolved = localUtils.resolveImageSync(url)
+              return localUtils.resolveImageSync(url);
+            }
+            
+            // En version Web standard, on conserve l'appel asynchrone
+            return localUtils.resolveImage(url);
+          },
       customRoles: editorOptions.customRoles ?? [],
       customDirectives: editorOptions.customDirectives ?? [],
       includeButtons: makeButtons(tab, getAllEditorIds, updateTabLabel, openFileHandleInTab),

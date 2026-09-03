@@ -46,6 +46,9 @@ const HeadingList = styled.div`
   li {
     overflow: hidden;
   }
+  li[draggable="true"] {
+    -webkit-user-drag: element;
+  }
   li > span {
     display: block;
     white-space: nowrap;
@@ -104,12 +107,15 @@ function Heading({ heading, dragState, setDragState, onDrop }) {
       onDragStart={(ev) => {
         if (heading.isTitle) return;
         ev.stopPropagation();
+        ev.dataTransfer.effectAllowed = "move";
+        ev.dataTransfer.setData("text/plain", heading.text); // requis par WebKit pour valider le drag
         setDragState({ dragged: heading, overNode: null, overPosition: null });
       }}
       onDragOver={(ev) => {
         if (!dragState.dragged || dragState.dragged === heading) return;
         ev.preventDefault();
         ev.stopPropagation();
+        ev.dataTransfer.dropEffect = "move";
         const rect = ev.currentTarget.getBoundingClientRect();
         const position = ev.clientY - rect.top < rect.height / 2 ? "before" : "after";
         setDragState((s) => (s.overNode === heading && s.overPosition === position ? s : { ...s, overNode: heading, overPosition: position }));
@@ -157,12 +163,10 @@ export const TableOfContents = ({ compact = false }) => {
     const targetSiblings = findSiblingsArray(headings.value, targetNode);
     if (draggedSiblings !== targetSiblings) return;
 
-    console.log("AVANT --> draggedNode, targetNode, position, headings.value, text.text.value", draggedNode, targetNode, position, headings.value, text.text.value)
     const newText = moveSectionInText(draggedNode, targetNode, position, headings.value, text.text.value);
     editorView.value.dispatch({
       changes: { from: 0, to: editorView.value.state.doc.length, insert: newText },
     });
-       console.log("APRÉS --> draggedNode, targetNode, position, headings.value, text.text.value", draggedNode, targetNode, position, headings.value, text.text.value)
 
   }
 
